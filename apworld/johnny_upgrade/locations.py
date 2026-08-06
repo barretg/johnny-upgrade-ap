@@ -76,12 +76,33 @@ def _add(name: str, requirement: Requirement) -> None:
 
 _add(FIND_THE_GUN, GUN_REQUIREMENT)
 
+# track -> tier for every shop location, so rules.py can chain "Tier N requires Tier N-1
+# already checked" without parsing location name strings. The shop UI (see client) only ever
+# exposes the next sequential tier for a track -- you cannot buy Tier 5 before Tier 1-4 -- so
+# this dependency is real and matters to the AP generator's placement decisions, not just
+# cosmetic: without it, a critical item could be placed behind a tier that's only reachable
+# after affording several prior (cash-gated) purchases the logic wasn't accounting for.
+SHOP_TIER_BY_LOCATION: dict[str, tuple[str, int]] = {}
+
 for _track, _prices in SHOP_PRICES.items():
     for _tier in range(1, len(_prices) + 1):
         # Ammo / Gun Power stay hidden in the shop ("LOCKED -- find a gun to unlock!") until
         # the gun pickup has been found at least once; every other track is always visible.
         _requirement: Requirement = NEEDS_GUN if _track in (PROGRESSIVE_AMMO, PROGRESSIVE_GUN_POWER) else None
-        _add(shop_location_name(_track, _tier), _requirement)
+        _name = shop_location_name(_track, _tier)
+        _add(_name, _requirement)
+        SHOP_TIER_BY_LOCATION[_name] = (_track, _tier)
+
+# Empirically-confirmed alternate route (see rules.py): these 8 coins normally need Jump 1 to
+# reach (a small platform to the left of spawn, before the crusher), but can also be reached by
+# shooting the gun to boost onto the platform (1 bullet) and again to reach its upper layer (a
+# 2nd bullet) -- both collapse to the same Progressive Ammo>=1 requirement since ammo capacity
+# comes in steps of 2 per tier (see rules.py's BULLET_JUMP_ALT_AMMO_TIER). Identified by
+# 0-indexed coin position: cluster A's y=240 and y=160 layers (8,9,16,17,18,93) and cluster B's
+# y=390/450 (237,238) -- NOT index 6 (a separate single coin), cluster A's y=80 layer, or
+# cluster B's y=510, which are unaffected and keep the plain Jump 1 requirement.
+BULLET_JUMP_ALT_COIN_INDICES = {8, 9, 16, 17, 18, 93, 237, 238}
+BULLET_JUMP_ALT_LOCATIONS = {coin_location_name(i) for i in BULLET_JUMP_ALT_COIN_INDICES}
 
 COIN_LOCATION_NAMES = [coin_location_name(i) for i in range(len(COIN_REQUIREMENTS))]
 for _i, _req in enumerate(COIN_REQUIREMENTS):

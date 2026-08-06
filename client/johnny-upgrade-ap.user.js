@@ -457,6 +457,11 @@
     if (doubleJumpCount > 0 && ldat.jmp2.v === 0) log("Double Jump unlocked.");
     ldat.jmp2.v = doubleJumpCount > 0 ? 0.1 : 0;
     receivedCounts["Double Jump"] = doubleJumpCount;
+    // `jumpMax` (the actual cap on jumps-before-landing, checked as `sprt.ju < jumpMax`) is
+    // NOT read live from ldat.jmp2.v -- it's a snapshot taken once in the Level state's
+    // create(), so receiving Double Jump mid-round previously had no effect until the next
+    // round started. Set the live global directly so it takes effect immediately.
+    if (typeof window.jumpMax !== "undefined") window.jumpMax = doubleJumpCount > 0 ? 2 : 1;
     renderStatus();
   }
 

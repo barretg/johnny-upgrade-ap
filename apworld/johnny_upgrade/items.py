@@ -54,10 +54,9 @@ TRAP_TIME = "Trap Time (-5s)"
 #     "progression" because the current logic (rules.py) never checks them -- hazard
 #     damage/energy budget isn't modeled by the reachability solver, and the coin
 #     multiplier only affects the local cash economy, not reachability.
-#   - Double Jump is "useful" rather than "progression" because the reachability solver
-#     never required it for any of the 246 coins, 6 enemies, the gun, or the boss arena
-#     with the current (documented, non-exhaustive) physics model. If real play finds a
-#     spot that genuinely needs it, reclassify to progression and add a rule for it.
+#   - Double Jump IS "progression": playtesting confirmed a real alternate route past the
+#     starting crusher requiring Jump 10 + Double Jump (instead of Speed 5), which rules.py
+#     encodes as an OR alternative for any location gated by that crusher.
 #   - Progressive Ammo / Progressive Gun Power are "progression" solely because of the
 #     placeholder boss-goal rule in rules.py, which assumes some combat capability is
 #     needed to defeat the boss. That assumption is unverified -- boss combat mechanics
@@ -69,7 +68,7 @@ TRAP_TIME = "Trap Time (-5s)"
 item_table: dict[str, ItemData] = {
     PROGRESSIVE_SPEED: ItemData(0, ItemClassification.progression, 10),
     PROGRESSIVE_JUMP_POWER: ItemData(1, ItemClassification.progression, 10),
-    DOUBLE_JUMP: ItemData(2, ItemClassification.useful, 1),
+    DOUBLE_JUMP: ItemData(2, ItemClassification.progression, 1),
     PROGRESSIVE_TIME_LIMIT: ItemData(3, ItemClassification.progression, 24),
     PROGRESSIVE_ENERGY: ItemData(4, ItemClassification.useful, 5),
     PROGRESSIVE_AMMO: ItemData(5, ItemClassification.progression, 10),
