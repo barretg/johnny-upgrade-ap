@@ -460,6 +460,15 @@
     renderStatus();
   }
 
+  // dsp.cns (the in-level cash HUD text) only exists while a round is actually active -- it's
+  // created fresh each time a level starts and doesn't exist in the shop/title screens, so this
+  // must stay guarded rather than called unconditionally.
+  function refreshCoinDisplay() {
+    if (window.dsp && window.dsp.cns && typeof window.updateCoinTxt === "function") {
+      window.updateCoinTxt();
+    }
+  }
+
   // Additive items (grant cash / adjust the live round timer) -- must only ever run once per
   // item, unlike the progressive tiers above.
   function applyAdditiveItems(names) {
@@ -479,6 +488,7 @@
       const multiplierTier = receivedCounts["Progressive Coin Multiplier"] || 0;
       const amount = base * (1 + 0.5 * multiplierTier);
       ldat.csh.v += amount;
+      refreshCoinDisplay();
       log("Received " + name + ": +" + amount.toFixed(0) + " cash");
       return;
     }
@@ -503,18 +513,29 @@
   // ---------------------------------------------------------------------------------------
   // Passive income backstop: without this, a player who has spent all their cash and hasn't
   // yet received a Coin Bundle item (map coins no longer pay out directly) has no way to ever
-  // afford another shop purchase -- a real softlock risk. Grants 1 cash per 3 cumulative
-  // seconds of actual round playtime (tunable below), tracked via game.ldat.stats.t, which the
-  // game already increments once per frame during clockCode and persists across rounds as part
-  // of its own local save. This is a placeholder rate -- explicitly expected to be retuned.
+  // afford another shop purchase -- a real softlock risk. Grants a configurable amount of cash
+  // per configurable number of cumulative seconds of actual round playtime -- both read from
+  // the player's own YAML options via slot_data ("Passive Income Seconds Per Tick" and
+  // "Passive Income Amount Per Tick", 1-10 each, defaults 3 and 1) -- tracked via
+  // game.ldat.stats.t, which the game already increments once per frame during clockCode and
+  // persists across rounds as part of its own local save.
   // ---------------------------------------------------------------------------------------
-  const PASSIVE_INCOME_INTERVAL_FRAMES = 3 * 60; // 3 seconds at 60fps
-  const PASSIVE_INCOME_AMOUNT = 1;
+  const PASSIVE_INCOME_DEFAULT_SECONDS = 3; // fallback only, before slot_data has arrived
+  const PASSIVE_INCOME_DEFAULT_AMOUNT = 1; // fallback only, before slot_data has arrived
   let passiveIncomeBaselineThreshold = null; // set on first check, so pre-existing playtime isn't retroactively paid out
+
+  function passiveIncomeIntervalFrames() {
+    const seconds = (ap.slotData && ap.slotData.passive_income_seconds) || PASSIVE_INCOME_DEFAULT_SECONDS;
+    return seconds * 60;
+  }
+
+  function passiveIncomeAmount() {
+    return (ap.slotData && ap.slotData.passive_income_amount) || PASSIVE_INCOME_DEFAULT_AMOUNT;
+  }
 
   function grantPassiveIncomeIfDue() {
     if (!window.game || !window.game.ldat || !window.game.ldat.stats) return;
-    const currentThreshold = Math.floor(window.game.ldat.stats.t / PASSIVE_INCOME_INTERVAL_FRAMES);
+    const currentThreshold = Math.floor(window.game.ldat.stats.t / passiveIncomeIntervalFrames());
     if (passiveIncomeBaselineThreshold === null) {
       passiveIncomeBaselineThreshold = currentThreshold;
       return;
@@ -523,7 +544,8 @@
     const intervalsElapsed = currentThreshold - passiveIncomeBaselineThreshold;
     passiveIncomeBaselineThreshold = currentThreshold;
     const multiplierTier = receivedCounts["Progressive Coin Multiplier"] || 0;
-    window.game.ldat.csh.v += PASSIVE_INCOME_AMOUNT * intervalsElapsed * (1 + 0.5 * multiplierTier);
+    window.game.ldat.csh.v += passiveIncomeAmount() * intervalsElapsed * (1 + 0.5 * multiplierTier);
+    refreshCoinDisplay();
   }
 
   // ---------------------------------------------------------------------------------------
@@ -606,10 +628,15 @@
       const before = window.coins ? window.coins.slice() : [];
       const cashBefore = window.game && window.game.ldat ? window.game.ldat.csh.v : null;
       originalCoinCode.apply(this, arguments);
-      // Vanilla coinCode grants local cash per coin (`csh.v += 1 + multi.v*5`) -- per the
-      // agreed design, map coins are pure location checks now and grant no local cash (cash
-      // instead comes only from received Coin Bundle items), so revert whatever it added.
-      if (cashBefore !== null) window.game.ldat.csh.v = cashBefore;
+      // Vanilla coinCode grants local cash per coin (`csh.v += 1 + multi.v*5`) AND refreshes the
+      // in-level cash HUD text (updateCoinTxt) using that inflated value, before we get a
+      // chance to revert it -- per the agreed design, map coins are pure location checks now
+      // and grant no local cash (cash instead comes only from received Coin Bundle items and
+      // passive income), so revert the value and refresh the HUD again to match.
+      if (cashBefore !== null) {
+        window.game.ldat.csh.v = cashBefore;
+        refreshCoinDisplay();
+      }
       const after = window.coins || [];
       if (after.length < before.length) {
         for (const c of before) {
@@ -832,6 +859,7 @@
   ap.onCashRestored = (amount) => {
     if (window.game && window.game.ldat) {
       window.game.ldat.csh.v = amount;
+      refreshCoinDisplay();
       log("Restored cash from server: " + amount);
     }
   };

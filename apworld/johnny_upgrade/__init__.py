@@ -120,4 +120,6 @@ class JohnnyUpgradeWorld(World):
             "shop_prices": SHOP_PRICES,
             "coin_bundle_values": COIN_BUNDLE_VALUES,
             "upgrade_track_tiers": UPGRADE_TRACK_TIERS,
+            "passive_income_seconds": self.options.passive_income_seconds.value,
+            "passive_income_amount": self.options.passive_income_amount.value,
         }
