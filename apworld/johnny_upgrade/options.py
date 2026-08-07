@@ -1,6 +1,24 @@
 from dataclasses import dataclass
 
-from Options import PerGameCommonOptions, Range, Toggle
+from Options import DefaultOnToggle, PerGameCommonOptions, Range, Toggle
+
+
+class DamageBoostsInLogic(DefaultOnToggle):
+    """Allow routes that require deliberately taking a hit to get past a hazard.
+
+    Taking damage grants 60 frames of invulnerability (killSprite sets sprt.inv = 60), which is
+    enough to run straight through an enemy that otherwise cannot be passed. One spot on the map
+    genuinely needs this: the floor robot under the low ceiling near the boss door has 200px of
+    clearance above it, and the player plus the robot need 210px, so it can neither be jumped nor
+    walked through.
+
+    Any route relying on this needs at least 2 hearts (1 Progressive Energy) so the hit is not
+    fatal. Turning this off removes every such route from logic; the solver confirms every
+    location also has a gun-based alternative (shoot the robot -- killRobot deletes it
+    permanently), so nothing becomes unreachable, but expect Progressive Ammo to become much more
+    load-bearing.
+    """
+    display_name = "Damage Boosts In Logic"
 
 
 class Coinsanity(Toggle):
@@ -50,5 +68,6 @@ class PassiveIncomeAmount(Range):
 class JohnnyUpgradeOptions(PerGameCommonOptions):
     coinsanity: Coinsanity
     enemysanity: Enemysanity
+    damage_boosts_in_logic: DamageBoostsInLogic
     passive_income_seconds: PassiveIncomeSeconds
     passive_income_amount: PassiveIncomeAmount

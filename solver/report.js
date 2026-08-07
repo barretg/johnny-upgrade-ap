@@ -236,28 +236,52 @@ function writePython(perLoc, unknownPairs, ran, total) {
     if (p.e > 1) o.energy = p.e;
     if (p.g) o.ammo = p.g;
     if (p.t) o.time = p.t;
-    o.via = p.via;
     return (
       '{' +
       Object.entries(o)
-        .map(([k, v]) => `"${k}": ${v === true ? 'True' : typeof v === 'string' ? `"${v}"` : v}`)
+        .map(([k, v]) => `"${k}": ${v === true ? 'True' : v}`)
         .join(', ') +
       '}'
     );
   };
-  const dump = (name, items) => {
-    py.push(`${name} = [`);
-    for (const p of items) {
-      py.push(`    ${p.reachable ? '[' + p.options.map(emit).join(', ') + ']' : 'None'},  # ${p.name}`);
+
+  // 254 locations share only ~175 distinct requirement sets, so emit each set once and have
+  // locations reference it by index. rules.py then builds each rule object once and shares it,
+  // instead of reconstructing ~4,800 near-duplicate rule trees.
+  const classes = [];
+  const classIndex = new Map();
+  const idOf = (p) => {
+    if (!p.reachable) return -1;
+    const key = JSON.stringify(p.options.map(emit));
+    if (!classIndex.has(key)) {
+      classIndex.set(key, classes.length);
+      classes.push(p.options);
     }
+    return classIndex.get(key);
+  };
+  const coinIds = perLoc.filter((p) => p.kind === 'coin').map(idOf);
+  const robotIds = perLoc.filter((p) => p.kind === 'robot').map(idOf);
+  const gunId = idOf(perLoc.find((p) => p.kind === 'gun'));
+  const bossId = idOf(perLoc.find((p) => p.kind === 'boss'));
+
+  py.push('# Each entry is one alternative set (OR); each dict inside is a set of minimums (AND).');
+  py.push('REQUIREMENT_CLASSES: list[list[dict]] = [');
+  classes.forEach((opts, i) => {
+    py.push(`    # ${i}`);
+    py.push(`    [${opts.map(emit).join(', ')}],`);
+  });
+  py.push(']');
+  py.push('');
+  const dumpIds = (name, ids, items) => {
+    py.push(`${name}: list[int] = [`);
+    ids.forEach((id, n) => py.push(`    ${id},  # ${items[n].name}`));
     py.push(']');
     py.push('');
   };
-  dump('COIN_REQUIREMENTS', perLoc.filter((p) => p.kind === 'coin'));
-  dump('ENEMY_REQUIREMENTS', perLoc.filter((p) => p.kind === 'robot'));
-  const one = (p) => (p.reachable ? '[' + p.options.map(emit).join(', ') + ']' : 'None');
-  py.push('GUN_REQUIREMENT = ' + one(perLoc.find((p) => p.kind === 'gun')));
-  py.push('BOSS_ARENA_REQUIREMENT = ' + one(perLoc.find((p) => p.kind === 'boss')));
+  dumpIds('COIN_REQUIREMENT_IDS', coinIds, perLoc.filter((p) => p.kind === 'coin'));
+  dumpIds('ENEMY_REQUIREMENT_IDS', robotIds, perLoc.filter((p) => p.kind === 'robot'));
+  py.push(`GUN_REQUIREMENT_ID = ${gunId}`);
+  py.push(`BOSS_ARENA_REQUIREMENT_ID = ${bossId}`);
   py.push('');
   fs.writeFileSync(path.join(A.OUT, 'generated_requirements.py'), py.join('\n'));
   console.log('wrote out/generated_requirements.py');

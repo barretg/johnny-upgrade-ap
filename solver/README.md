@@ -117,6 +117,28 @@ Outputs land in `out/`:
 - `logic.generated.txt` — human-readable, in the shape of `scratch-work/logic.txt`
 - `generated_requirements.py` — for the apworld
 
+## Feeding the apworld
+
+```bash
+node report.js --py --terms 999 --coverage 1     # full logic, no pruning
+cp out/generated_requirements.py ../apworld/johnny_upgrade/generated_requirements.py
+python ../solver/validate_apworld.py             # from the repo root
+```
+
+254 locations share only ~175 distinct requirement sets, so `generated_requirements.py` emits
+each set once as `REQUIREMENT_CLASSES` and has locations reference it by index. `rules.py` builds
+each rule object once and shares it rather than reconstructing ~3,600 near-identical rule trees.
+
+`validate_apworld.py` stubs out Archipelago and exercises the real `rules.py` translation against
+synthetic inventories. It checks that every class id resolves, no requirement exceeds the item
+pool (including `energy` being TOTAL hearts, costing `hearts - 1` items), every class survives
+with damage boosts disabled, disabling damage boosts never *loosens* a rule, and the hand-derived
+spot checks still hold.
+
+`--terms N` / `--coverage F` prune the antichain via greedy set cover if you ever want smaller
+rules; pruning only ever makes rules stricter. `requirements.json` always carries the unpruned
+`fullOptions` plus `noDamageOptions`.
+
 ## Conservatism
 
 Every discretization knob errs toward *under*-reporting reachability: merging states can only

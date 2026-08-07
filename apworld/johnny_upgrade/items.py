@@ -49,18 +49,20 @@ COIN_BUNDLE_VALUES = {
 BONUS_TIME = "Bonus Time (+5s)"
 TRAP_TIME = "Trap Time (-5s)"
 
-# NOTE on classifications below (flagged for review against real play):
-#   - Progressive Energy and Progressive Coin Multiplier are "useful" rather than
-#     "progression" because the current logic (rules.py) never checks them -- hazard
-#     damage/energy budget isn't modeled by the reachability solver, and the coin
-#     multiplier only affects the local cash economy, not reachability.
-#   - Double Jump IS "progression": playtesting confirmed a real alternate route past the
-#     starting crusher requiring Jump 10 + Double Jump (instead of Speed 5), which rules.py
-#     encodes as an OR alternative for any location gated by that crusher.
-#   - Progressive Ammo / Progressive Gun Power are "progression" solely because of the
-#     placeholder boss-goal rule in rules.py, which assumes some combat capability is
-#     needed to defeat the boss. That assumption is unverified -- boss combat mechanics
-#     were not reverse engineered in depth.
+# NOTE on classifications below:
+#   - Progressive Energy is "progression". The physics solver (see solver/README.md) found the
+#     floor robot near the boss door cannot be jumped (200px of clearance, 210px needed) or
+#     walked through, so the only routes past it are damage-boosting through its i-frames
+#     (2+ hearts) or shooting it. With damage boosts enabled it gates 34 coins and the boss.
+#   - Progressive Ammo is "progression": shooting that same robot is the alternative route, and
+#     bullets are the ONLY way to kill a robot at all (killRobot is reachable from
+#     bulletHitEnemy and nowhere else), so all 6 enemysanity checks depend on it. Shooting also
+#     provides a ~66px bullet-hop (`yy -= 12` when grounded) that substitutes for Jump 1.
+#   - Progressive Gun Power is "progression" only for the boss goal: bossHit subtracts
+#     gunpow.v from boss.nrgMax = 2, so tier drives how many hits the kill takes.
+#   - Double Jump is "progression": it appears in a large share of the solver's minimal routes.
+#   - Progressive Coin Multiplier stays "useful" -- it only affects the local cash economy,
+#     never reachability.
 #
 # Total item count (328) is made to exactly match total location count when coinsanity and
 # enemysanity are both enabled (1 gun + 75 shop + 246 coins + 6 robots = 328); create_items()
@@ -70,7 +72,7 @@ item_table: dict[str, ItemData] = {
     PROGRESSIVE_JUMP_POWER: ItemData(1, ItemClassification.progression, 10),
     DOUBLE_JUMP: ItemData(2, ItemClassification.progression, 1),
     PROGRESSIVE_TIME_LIMIT: ItemData(3, ItemClassification.progression, 24),
-    PROGRESSIVE_ENERGY: ItemData(4, ItemClassification.useful, 5),
+    PROGRESSIVE_ENERGY: ItemData(4, ItemClassification.progression, 5),
     PROGRESSIVE_AMMO: ItemData(5, ItemClassification.progression, 10),
     PROGRESSIVE_GUN_POWER: ItemData(6, ItemClassification.progression, 5),
     PROGRESSIVE_COIN_MULTIPLIER: ItemData(7, ItemClassification.useful, 10),

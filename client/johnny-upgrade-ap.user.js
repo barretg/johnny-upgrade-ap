@@ -451,7 +451,13 @@
       const count = counts[name] || 0;
       if (count !== receivedCounts[name]) log("Set " + field + " to tier " + count + " (" + name + ")");
       receivedCounts[name] = count;
-      ldat[field].v = count * 0.1;
+      // Energy is the one track with a nonzero vanilla baseline: iniLdat starts nrg.v at 0.1,
+      // i.e. one heart, and the shop ladder counts up from there. Setting it to count * 0.1
+      // would mean 0 items = 0 hearts and 1 item = 1 heart -- and 1 heart still dies to the
+      // first hit (killSprite destroys the sprite once nrg.length hits 0). Logic requires
+      // 2 hearts for the damage-boost routes, so that off-by-one would make every route the
+      // generator thinks is open with 1 Progressive Energy actually impossible.
+      ldat[field].v = (field === "nrg" ? count + 1 : count) * 0.1;
     }
     const doubleJumpCount = counts["Double Jump"] || 0;
     if (doubleJumpCount > 0 && ldat.jmp2.v === 0) log("Double Jump unlocked.");
@@ -881,6 +887,10 @@
     for (const name of Object.keys(receivedCounts)) receivedCounts[name] = 0;
     if (window.game && window.game.ldat) {
       for (const field of Object.values(UPGRADE_FIELD_BY_ITEM)) window.game.ldat[field].v = 0;
+      // Energy keeps its vanilla baseline of one heart even at zero received items -- 0 hearts
+      // is a state the game never produces on its own (iniLdat starts at 0.1) and it leaves
+      // iniNRG drawing an empty health bar.
+      window.game.ldat.nrg.v = 0.1;
       window.game.ldat.jmp2.v = 0;
     }
     if (window.game && window.game.state) window.game.state.start("Title");
