@@ -142,8 +142,9 @@
       this.storageKey = null;
       this.scoutedItemDisplay = {}; // location name -> display string, once resolved
       this.dataPackageReady = false;
-      this.cashSyncTimer = null;
+      this.stateSyncTimer = null;
       this.lastSyncedCash = null;
+      this.lastSyncedAreas = null;
       this.onConnected = () => {};
       this.onDisconnected = () => {};
       this.onItemsReceived = () => {}; // (allItemNamesSoFar, newAdditiveNamesThisUpdate)
@@ -152,6 +153,8 @@
       this.onOwnCheckSent = () => {}; // (locationName) -- called whenever WE send a new check
       this.onCashRestored = () => {}; // (amount) -- server-stored cash retrieved/updated
       this.getLocalCash = () => null; // provided by the caller, reads window.game.ldat.csh.v
+      this.onAreasRestored = () => {}; // (bitmask) -- server-stored visited areas retrieved/updated
+      this.getLocalAreas = () => null; // provided by the caller, reads window.game.ldat.ars
     }
 
     connect(address, slotName, password) {
@@ -245,9 +248,9 @@
     }
 
     _teardown() {
-      if (this.cashSyncTimer) {
-        clearInterval(this.cashSyncTimer);
-        this.cashSyncTimer = null;
+      if (this.stateSyncTimer) {
+        clearInterval(this.stateSyncTimer);
+        this.stateSyncTimer = null;
       }
       this.socket = null;
       this.connected = false;
@@ -263,6 +266,7 @@
       this.scoutedItemDisplay = {};
       this.dataPackageReady = false;
       this.lastSyncedCash = null;
+      this.lastSyncedAreas = null;
       this.onDisconnected();
     }
 
@@ -275,18 +279,41 @@
       return "johnny_upgrade_cash_" + this.team + "_" + this.slot;
     }
 
-    _startCashSync() {
-      this.cashSyncTimer = setInterval(() => {
-        const current = this.getLocalCash();
-        if (current === null || current === this.lastSyncedCash) return;
-        this.lastSyncedCash = current;
-        this._send({
-          cmd: "Set",
-          key: this._cashKey(),
-          default: 0,
-          want_reply: false,
-          operations: [{ operation: "replace", value: current }],
-        });
+    // Visited camera areas (game.ldat.ars) as a bitmask. getXP() is n*n*5 over that array and is
+    // what prices Double Jump in the shop, and unlike cash there is no other server-side record
+    // of it -- without this, disconnecting would permanently cost the player their EXP progress.
+    _areasKey() {
+      return "johnny_upgrade_areas_" + this.team + "_" + this.slot;
+    }
+
+    _startStateSync() {
+      if (this.stateSyncTimer) return;
+      this.stateSyncTimer = setInterval(() => {
+        const cash = this.getLocalCash();
+        if (cash !== null && cash !== this.lastSyncedCash) {
+          this.lastSyncedCash = cash;
+          this._send({
+            cmd: "Set",
+            key: this._cashKey(),
+            default: 0,
+            want_reply: false,
+            operations: [{ operation: "replace", value: cash }],
+          });
+        }
+        const areas = this.getLocalAreas();
+        if (areas !== null && areas !== this.lastSyncedAreas) {
+          this.lastSyncedAreas = areas;
+          // "or", not "replace": areas are only ever gained, so a union is both the correct merge
+          // across sessions and structurally safe -- a client that has just wiped its save sends
+          // 0 and cannot clobber what the server already knows.
+          this._send({
+            cmd: "Set",
+            key: this._areasKey(),
+            default: 0,
+            want_reply: false,
+            operations: [{ operation: "or", value: areas }],
+          });
+        }
       }, 2000);
     }
 
@@ -344,20 +371,35 @@
           // Restore cash from server-side data storage (so it survives a disconnect/reload,
           // since it otherwise only lives in the page's in-memory game.ldat.csh.v), and keep
           // pushing local changes to it periodically so it stays backed up while playing.
-          this._send({ cmd: "Get", keys: [this._cashKey()] });
-          this._send({ cmd: "SetNotify", keys: [this._cashKey()] });
-          this._startCashSync();
+          this._send({ cmd: "Get", keys: [this._cashKey(), this._areasKey()] });
+          this._send({ cmd: "SetNotify", keys: [this._cashKey(), this._areasKey()] });
+          // The periodic push deliberately does NOT start here. On a fresh connection the local
+          // save has just been wiped (cash back to 1, no areas), so a tick landing before the
+          // Get response would "replace" the server's stored cash with 1 and destroy it. Start
+          // syncing only once the server's values are in hand -- see the Retrieved case.
           break;
         case "Retrieved":
-          if (packet.keys && packet.keys[this._cashKey()] !== null && packet.keys[this._cashKey()] !== undefined) {
-            this.lastSyncedCash = packet.keys[this._cashKey()];
-            this.onCashRestored(packet.keys[this._cashKey()]);
+          if (packet.keys) {
+            const storedCash = packet.keys[this._cashKey()];
+            if (storedCash !== null && storedCash !== undefined) {
+              this.lastSyncedCash = storedCash;
+              this.onCashRestored(storedCash);
+            }
+            const storedAreas = packet.keys[this._areasKey()];
+            if (storedAreas !== null && storedAreas !== undefined) {
+              this.lastSyncedAreas = storedAreas;
+              this.onAreasRestored(storedAreas);
+            }
+            this._startStateSync();
           }
           break;
         case "SetReply":
           if (packet.key === this._cashKey()) {
             this.lastSyncedCash = packet.value;
             this.onCashRestored(packet.value);
+          } else if (packet.key === this._areasKey()) {
+            this.lastSyncedAreas = packet.value;
+            this.onAreasRestored(packet.value);
           }
           break;
         case "LocationInfo":
@@ -495,6 +537,11 @@
   // fires, anything still sitting in this queue is lost rather than re-granted on reconnect.
   // Low-probability given the game usually loads within a couple seconds, but a known gap.
   let pendingAdditiveNames = [];
+
+  // Hooks are installed exactly once (see hooksInstalled), so this has to live out here rather
+  // than inside installHooks() -- otherwise it would stay true across a disconnect and a later
+  // session could never report its goal.
+  let goalSent = false;
 
   // Rebuild every progressive tier from the FULL item history (safe to call repeatedly, e.g.
   // once per ReceivedItems packet including replays after a reconnect) since setting `.v`
@@ -753,7 +800,6 @@
     };
 
     const originalBossHit = window.bossHit;
-    let goalSent = false;
     window.bossHit = function (p) {
       originalBossHit.apply(this, arguments);
       if (!goalSent && window.boss && window.boss.nrg <= 0) {
@@ -927,6 +973,35 @@
   }
 
   ap.getLocalCash = () => (window.game && window.game.ldat ? window.game.ldat.csh.v : null);
+
+  // game.ldat.ars is a sparse array indexed by the map's area order (areaCode does
+  // `ldat.ars[areas.indexOf(area)] = 1`), so a bitmask over those indices is a faithful and
+  // compact representation -- and it lets the server merge sessions with a bitwise "or".
+  ap.getLocalAreas = () => {
+    if (!window.game || !window.game.ldat || !window.game.ldat.ars) return null;
+    const ars = window.game.ldat.ars;
+    let mask = 0;
+    for (let i = 0; i < ars.length && i < 31; i++) if (ars[i]) mask |= 1 << i;
+    return mask;
+  };
+  ap.onAreasRestored = (mask) => {
+    if (!window.game || !window.game.ldat || !mask) return;
+    const ars = window.game.ldat.ars || (window.game.ldat.ars = []);
+    let restored = 0;
+    for (let i = 0; i < 31; i++) {
+      if (mask & (1 << i)) {
+        if (!ars[i]) restored++;
+        ars[i] = 1;
+      }
+    }
+    if (restored > 0) {
+      // getXP() is n*n*5 over this array, so report the EXP the restore is actually worth.
+      let n = 0;
+      for (let i = 0; i < ars.length; i++) if (ars[i]) n++;
+      log("Restored " + restored + " visited area(s) from server (EXP now " + n * n * 5 + ")");
+      if (typeof window.saveStats === "function") window.saveStats();
+    }
+  };
   ap.onCashRestored = (amount) => {
     if (window.game && window.game.ldat) {
       window.game.ldat.csh.v = amount;
@@ -939,20 +1014,44 @@
     setConnectButtonState(true);
     renderStatus();
   };
+  // Wipe the local save completely. All authoritative state lives on the server (items drive
+  // every upgrade tier, checked locations drive the gun and which pickups still exist, and cash
+  // is mirrored to DataStorage under _cashKey), so a disconnected client should hold nothing.
+  //
+  // This reuses the game's own reset -- title.js's confirm-reset button runs exactly
+  // `iniLdat(); saveStats(); newState();` -- rather than clearing fields by hand. Hand-clearing
+  // is what left cash, wpn (gun found), ars (visited areas, which price Double Jump in EXP) and
+  // stats.t (accumulated playtime, which drives passive income) behind, and it would drift from
+  // vanilla's defaults over time. iniLdat() rebuilds ldat from scratch and saveStats() overwrites
+  // the persisted copy, so nothing survives a page reload either.
+  function resetGameSave() {
+    if (typeof window.iniLdat === "function") {
+      window.iniLdat();
+      if (typeof window.saveStats === "function") window.saveStats();
+    } else if (window.game && window.game.ldat) {
+      // Fallback for the window before the game's own script has defined iniLdat.
+      for (const field of Object.values(UPGRADE_FIELD_BY_ITEM)) window.game.ldat[field].v = 0;
+      window.game.ldat.nrg.v = 0.1; // vanilla baseline: one heart, never zero
+      window.game.ldat.jmp2.v = 0;
+      window.game.ldat.wpn.v = 0;
+      window.game.ldat.csh.v = 1;
+      window.game.ldat.ars = [];
+      window.game.ldat.stats = { t: 0, s: 0 };
+    }
+  }
+
   ap.onDisconnected = () => {
     setConnectButtonState(false);
-    // Reset locally-driven state back to a clean slate -- upgrades are entirely AP-item-driven,
-    // so with no connection there's nothing backing them anymore, and leaving stale tiers
-    // active while disconnected would be misleading.
+    resetGameSave();
+
+    // Client-side bookkeeping that shadows the wiped save has to go with it.
     for (const name of Object.keys(receivedCounts)) receivedCounts[name] = 0;
-    if (window.game && window.game.ldat) {
-      for (const field of Object.values(UPGRADE_FIELD_BY_ITEM)) window.game.ldat[field].v = 0;
-      // Energy keeps its vanilla baseline of one heart even at zero received items -- 0 hearts
-      // is a state the game never produces on its own (iniLdat starts at 0.1) and it leaves
-      // iniNRG drawing an empty health bar.
-      window.game.ldat.nrg.v = 0.1;
-      window.game.ldat.jmp2.v = 0;
-    }
+    pendingAdditiveNames = [];
+    goalSent = false;
+    // stats.t is back to 0, so a stale high baseline would suppress passive income until
+    // playtime climbed past the old total. null makes it re-baseline on the next check.
+    passiveIncomeBaselineThreshold = null;
+
     if (window.game && window.game.state) window.game.state.start("Title");
     renderStatus();
   };
