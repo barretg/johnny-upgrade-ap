@@ -63,6 +63,62 @@ def shop_location_name(track: str, tier: int) -> str:
     return f"Shop: {track} Tier {tier}"
 
 
+# Pacing the shop with Progressive Coin Multiplier.
+#
+# Shop tiers cost cash, but cash is invisible to logic: it comes from Coin Bundle items, which are
+# filler, and `state.prog_items` only tracks progression items -- so a rule literally cannot see
+# them without reclassifying 222 items. With only the "Tier N-1 first" chain to go on, the
+# generator therefore believed all 75 shop checks were free from the start, dumped them into
+# sphere 1, and left the player resetting and waiting on passive income to actually afford them.
+#
+# Progressive Coin Multiplier is the natural stand-in: it is the item that actually governs cash
+# throughput (+50% per tier on both bundles and passive income), so "this tier costs more, so it
+# wants a better multiplier" is the real relationship rather than an arbitrary gate.
+#
+# Tiers are ranked by CUMULATIVE cost within their track (what you must have earned to have bought
+# tiers 1..N of it) and then split into equal buckets. Ranking by cumulative cost is what keeps
+# each track's gates monotonically non-decreasing, which matters: the tier chain below requires
+# Tier N-1, so a later tier must never demand a LOWER multiplier than an earlier one.
+#
+# The top bucket is 9, not 10, so the last checks do not depend on collecting literally every
+# Progressive Coin Multiplier in the pool.
+SHOP_MULTIPLIER_BUCKETS = 10
+
+
+def _build_shop_multiplier_gates() -> dict[str, int]:
+    entries: list[tuple[int, str, int]] = []
+    for track, prices in SHOP_PRICES.items():
+        if track == DOUBLE_JUMP:
+            continue  # priced in XP, not cash -- gated by exploration instead, see below
+        cumulative = 0
+        for tier, price in enumerate(prices, start=1):
+            cumulative += price
+            entries.append((cumulative, track, tier))
+    entries.sort()
+    return {
+        shop_location_name(track, tier): rank * SHOP_MULTIPLIER_BUCKETS // len(entries)
+        for rank, (_cumulative, track, tier) in enumerate(entries)
+    }
+
+
+SHOP_MULTIPLIER_GATE: dict[str, int] = _build_shop_multiplier_gates()
+
+# Double Jump is the one shop entry not bought with cash. addITM prices it in EXP and shopBtnPress
+# gates it on `getXP() >= price`, where getXP() is n*n*5 over game.ldat.ars -- the count of camera
+# areas the player has ever entered, set by areaCode() purely on rectangle overlap. Nothing about
+# the gun or enemies is involved.
+#
+# 600 EXP therefore needs n >= 11 of the map's 15 areas. Rather than model each area separately,
+# this gates on the DEEPEST one (areas[12], the boss-side strip at x 2180-3412), on the grounds
+# that getting there means having crossed the map. That is sound in practice because ldat.ars
+# accumulates across runs and is never reset, so a player who can reach the deepest area can pick
+# up the easy ones over subsequent attempts -- the hardest area is the real binding constraint.
+#
+# Reaching the boss arena puts the player inside that strip, so its solved requirement is reused
+# directly instead of inventing a new one.
+XP_SHOP_LOCATION = shop_location_name(DOUBLE_JUMP, 1)
+
+
 def coin_location_name(index: int) -> str:
     return f"Coin {index + 1}"
 
@@ -118,8 +174,11 @@ __all__ = [
     "NEEDS_GUN",
     "REQUIREMENT_CLASSES",
     "ROBOT_LOCATION_NAMES",
+    "SHOP_MULTIPLIER_BUCKETS",
+    "SHOP_MULTIPLIER_GATE",
     "SHOP_PRICES",
     "SHOP_TIER_BY_LOCATION",
+    "XP_SHOP_LOCATION",
     "location_table",
     "shop_location_name",
 ]

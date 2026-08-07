@@ -204,6 +204,54 @@ check(has_opt(12, speed=5, time=1), "Coin 12 is Speed 5 + Time 1")
 check(all(o.get("ammo", 0) > 0 for i in gr.ENEMY_REQUIREMENT_IDS for o in CLASSES[i]), "every robot check requires ammo")
 check(all(o.get("ammo", 0) == 0 for o in CLASSES[gr.GUN_REQUIREMENT_ID]), "Find the Gun never requires the gun")
 
+print("\nshop pacing (Progressive Coin Multiplier gates)")
+GATES = locations.SHOP_MULTIPLIER_GATE
+# Double Jump is priced in EXP, not cash, so it is deliberately absent from the cash-cost ranking.
+check(len(GATES) == 74, f"74 cash-priced shop locations have a gate (got {len(GATES)})")
+check(locations.XP_SHOP_LOCATION not in GATES, "Double Jump is excluded from the cash-cost ranking")
+check(locations.XP_SHOP_LOCATION in locations.location_table, "the EXP shop location exists")
+check(
+    max(GATES.values()) <= TIERS[items.PROGRESSIVE_COIN_MULTIPLIER],
+    f"max gate {max(GATES.values())} <= {TIERS[items.PROGRESSIVE_COIN_MULTIPLIER]} multiplier items in pool",
+)
+check(
+    max(GATES.values()) < TIERS[items.PROGRESSIVE_COIN_MULTIPLIER],
+    "top gate leaves at least one spare multiplier item",
+)
+sphere1 = [n for n, g in GATES.items() if g == 0]
+check(len(sphere1) > 0, f"{len(sphere1)} shop checks still available with no multiplier")
+check(len(sphere1) < 74, f"only {len(sphere1)}/74 shop checks are ungated (not all sphere 1)")
+
+# The EXP shop entry must end up strictly harder than a bare multiplier gate: it should demand
+# the same movement the deepest area does.
+xp_rule = rules._class_rule(locations.BOSS_ARENA_REQUIREMENT, True)
+check(xp_rule is not None, "the deepest-area requirement is a real (non-empty) rule")
+check(not xp_rule.test({items.PROGRESSIVE_SPEED: 1}), "Double Jump is not reachable at game start")
+check(xp_rule.test(MAXED), "Double Jump is reachable with everything")
+
+# The tier chain requires Tier N-1, so a later tier demanding a HIGHER multiplier is fine but a
+# LOWER one would be dead weight -- and a non-monotonic gate would mean the chain can never be
+# satisfied in order.
+nonmono = []
+for track, prices in locations.SHOP_PRICES.items():
+    prev = -1
+    for tier in range(1, len(prices) + 1):
+        g = GATES.get(locations.shop_location_name(track, tier), 0)
+        if g < prev:
+            nonmono.append((track, tier))
+        prev = g
+check(not nonmono, f"gates are monotonic within every track (bad: {nonmono[:3]})")
+
+spread = {}
+for g in GATES.values():
+    spread[g] = spread.get(g, 0) + 1
+check(len(spread) >= 8, f"gates span {len(spread)} distinct multiplier levels")
+print("       distribution: " + ", ".join(f"{g}:{spread[g]}" for g in sorted(spread)))
+check(
+    items.item_table[items.PROGRESSIVE_COIN_MULTIPLIER].classification is _ItemClassification.progression,
+    "Progressive Coin Multiplier is progression (else logic cannot see it)",
+)
+
 print("\nlocation table")
 check(len(locations.COIN_LOCATION_NAMES) == 246, "246 coin locations")
 check(len(locations.ROBOT_LOCATION_NAMES) == 6, "6 robot locations")

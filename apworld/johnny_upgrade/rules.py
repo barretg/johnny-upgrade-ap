@@ -5,6 +5,7 @@ from rule_builder.rules import CanReachLocation, Has, Rule
 from .items import (
     DOUBLE_JUMP,
     PROGRESSIVE_AMMO,
+    PROGRESSIVE_COIN_MULTIPLIER,
     PROGRESSIVE_ENERGY,
     PROGRESSIVE_GUN_POWER,
     PROGRESSIVE_JUMP_POWER,
@@ -16,7 +17,9 @@ from .locations import (
     FIND_THE_GUN,
     NEEDS_GUN,
     REQUIREMENT_CLASSES,
+    SHOP_MULTIPLIER_GATE,
     SHOP_TIER_BY_LOCATION,
+    XP_SHOP_LOCATION,
     location_table,
     shop_location_name,
 )
@@ -133,9 +136,25 @@ def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
         # Shop tiers must be bought in order -- the shop UI only ever exposes the next sequential
         # tier for a track, so checking Tier N for real requires Tier N-1 already checked.
         track_tier = SHOP_TIER_BY_LOCATION.get(name)
-        if track_tier is not None and track_tier[1] > 1:
-            chain_rule = CanReachLocation(shop_location_name(track_tier[0], track_tier[1] - 1))
-            rule = chain_rule if rule is None else rule & chain_rule
+        if track_tier is not None:
+            if track_tier[1] > 1:
+                chain_rule = CanReachLocation(shop_location_name(track_tier[0], track_tier[1] - 1))
+                rule = chain_rule if rule is None else rule & chain_rule
+            # Pace the shop across the run instead of leaving all 75 checks in sphere 1 -- see
+            # SHOP_MULTIPLIER_GATE in locations.py for why the multiplier is the right stand-in
+            # for affordability.
+            gate = SHOP_MULTIPLIER_GATE.get(name, 0)
+            if gate > 0:
+                gate_rule = Has(PROGRESSIVE_COIN_MULTIPLIER, count=gate)
+                rule = gate_rule if rule is None else rule & gate_rule
+
+            # Double Jump is bought with EXP, not cash, and EXP is the count of camera areas ever
+            # entered -- so it is gated on exploration reaching the deepest area rather than on
+            # the multiplier. See XP_SHOP_LOCATION in locations.py.
+            if name == XP_SHOP_LOCATION:
+                xp_rule = _class_rule(BOSS_ARENA_REQUIREMENT, allow_damage_boosts)
+                if xp_rule is not None:
+                    rule = xp_rule if rule is None else rule & xp_rule
 
         if rule is not None:
             world.set_rule(location, rule)

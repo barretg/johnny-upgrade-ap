@@ -40,9 +40,9 @@ SMALL_COIN_BUNDLE = "Small Coin Bundle"
 MEDIUM_COIN_BUNDLE = "Medium Coin Bundle"
 LARGE_COIN_BUNDLE = "Large Coin Bundle"
 COIN_BUNDLE_VALUES = {
-    SMALL_COIN_BUNDLE: 5,
-    MEDIUM_COIN_BUNDLE: 15,
-    LARGE_COIN_BUNDLE: 50,
+    SMALL_COIN_BUNDLE: 25,
+    MEDIUM_COIN_BUNDLE: 50,
+    LARGE_COIN_BUNDLE: 100,
 }
 
 # Bonus/trap: adjust the active round's countdown timer directly when received.
@@ -61,8 +61,10 @@ TRAP_TIME = "Trap Time (-5s)"
 #   - Progressive Gun Power is "progression" only for the boss goal: bossHit subtracts
 #     gunpow.v from boss.nrgMax = 2, so tier drives how many hits the kill takes.
 #   - Double Jump is "progression": it appears in a large share of the solver's minimal routes.
-#   - Progressive Coin Multiplier stays "useful" -- it only affects the local cash economy,
-#     never reachability.
+#   - Progressive Coin Multiplier is "progression" because the shop is paced by it: cash itself
+#     is invisible to logic (Coin Bundles are filler, and state.prog_items only tracks
+#     progression items), so the multiplier -- the item that actually governs cash throughput --
+#     stands in for affordability. See SHOP_MULTIPLIER_GATE in locations.py.
 #
 # Total item count (328) is made to exactly match total location count when coinsanity and
 # enemysanity are both enabled (1 gun + 75 shop + 246 coins + 6 robots = 328); create_items()
@@ -75,7 +77,7 @@ item_table: dict[str, ItemData] = {
     PROGRESSIVE_ENERGY: ItemData(4, ItemClassification.progression, 5),
     PROGRESSIVE_AMMO: ItemData(5, ItemClassification.progression, 10),
     PROGRESSIVE_GUN_POWER: ItemData(6, ItemClassification.progression, 5),
-    PROGRESSIVE_COIN_MULTIPLIER: ItemData(7, ItemClassification.useful, 10),
+    PROGRESSIVE_COIN_MULTIPLIER: ItemData(7, ItemClassification.progression, 10),
     SMALL_COIN_BUNDLE: ItemData(8, ItemClassification.filler, 140),
     MEDIUM_COIN_BUNDLE: ItemData(9, ItemClassification.filler, 65),
     LARGE_COIN_BUNDLE: ItemData(10, ItemClassification.filler, 17),
