@@ -156,27 +156,87 @@
 
     connect(address, slotName, password) {
       if (this.socket) this.disconnect(); // clean up any previous connection first
-      const url = /^wss?:\/\//.test(address) ? address : "ws://" + address;
       this.slotName = slotName;
       this.password = password || "";
       this.storageKey = "ap_ju_" + address + "_" + slotName;
+
+      // Try TLS first, then fall back to plaintext. Hosted rooms (archipelago.gg) are wss-only,
+      // and a page served over HTTPS -- which coolmathgames.com is -- is not allowed to open an
+      // insecure ws:// socket at all: the browser blocks it as mixed content before the request
+      // ever leaves. Plain ws:// is really only for a self-hosted server with no certificate,
+      // so it belongs second. An address typed with an explicit scheme is always honoured as-is.
+      const explicit = /^wss?:\/\//i.test(address);
+      const urls = explicit ? [address] : ["wss://" + address, "ws://" + address];
+      this._attemptId = (this._attemptId || 0) + 1;
+      this._openSocket(urls, 0, this._attemptId);
+    }
+
+    _openSocket(urls, index, attemptId) {
+      // A newer connect() (or a disconnect) superseded this attempt while it was in flight.
+      if (attemptId !== this._attemptId) return;
+
+      const url = urls[index];
+      const isLast = index >= urls.length - 1;
       log("Connecting to " + url + " ...");
-      this.socket = new WebSocket(url);
-      this.socket.onopen = () => log("Socket open, waiting for RoomInfo...");
-      this.socket.onclose = () => {
+
+      let socket;
+      try {
+        socket = new WebSocket(url);
+      } catch (e) {
+        // Mixed-content blocking can throw synchronously rather than firing an error event.
+        log("Could not open " + url + ": " + (e && e.message ? e.message : e));
+        if (!isLast) {
+          this._openSocket(urls, index + 1, attemptId);
+        } else {
+          this._failed(urls);
+        }
+        return;
+      }
+      this.socket = socket;
+
+      let opened = false;
+      socket.onopen = () => {
+        opened = true;
+        log("Socket open, waiting for RoomInfo...");
+      };
+      // WebSocket error events carry no useful detail by design (the spec deliberately hides
+      // why, to avoid leaking cross-origin information), so there is nothing worth logging here
+      // -- onclose below is what decides whether to retry or report.
+      socket.onerror = () => {};
+      socket.onclose = () => {
+        if (attemptId !== this._attemptId) return;
+        if (!opened) {
+          // Never established, so this scheme is simply not what the server speaks.
+          if (!isLast) {
+            this._openSocket(urls, index + 1, attemptId);
+            return;
+          }
+          this._failed(urls);
+          return;
+        }
         log("Disconnected.");
         this._teardown();
       };
-      this.socket.onerror = (e) => log("Socket error: " + (e.message || "unknown"));
-      this.socket.onmessage = (event) => {
+      socket.onmessage = (event) => {
         const packets = JSON.parse(event.data);
         for (const packet of packets) this._handlePacket(packet);
       };
     }
 
+    _failed(urls) {
+      log("Could not connect (tried " + urls.join(", ") + ").");
+      if (location.protocol === "https:" && urls.some((u) => u.startsWith("ws://"))) {
+        log("Note: this page is HTTPS, so plain ws:// is blocked by the browser.");
+      }
+      this._teardown();
+    }
+
     // Explicit user-initiated disconnect (as opposed to the socket closing on its own, which
     // still routes through the same cleanup via socket.onclose above).
     disconnect() {
+      // Invalidate any in-flight connect attempt so its close handler cannot resurrect things
+      // by falling back to the next scheme after the user has already asked to stop.
+      this._attemptId = (this._attemptId || 0) + 1;
       if (this.socket) {
         this.socket.onclose = null; // avoid double-teardown via the close event too
         this.socket.close();
