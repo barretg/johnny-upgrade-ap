@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Johnny Upgrade Logic Debug Sandbox
 // @namespace    johnny-upgrade-ap
-// @version      0.1.0
+// @version      0.2.0
 // @description  Offline sandbox for manually exploring Johnny Upgrade's reachability logic -- no Archipelago connection at all
 // @match        https://www.coolmathgames.com/0-johnny-upgrade/play
 // @run-at       document-idle
@@ -14,17 +14,18 @@
  *
  * Purpose: let you manually set every upgrade tier directly (bypassing Archipelago entirely) so
  * you can walk the map and empirically determine what's actually reachable with what stats,
- * instead of guessing from map coordinates. Specifically:
- *   - Every stat (Speed, Jump Power, Double Jump, Time Limit, Energy, Ammo, Gun Power, Coin
- *     Multiplier, Has Gun) is directly settable from a panel, applied live (including the two
- *     known per-round snapshot values -- jumpMax and the live round timer -- so changes take
- *     effect immediately instead of waiting for the next round).
- *   - Coins never despawn when collected (no cash granted, no removal, no fly-away animation) --
- *     instead each logs its 1-indexed coin number and (x,y) position, throttled to once per 5
- *     seconds per coin while standing on it, so you can correlate what you see on screen with
- *     the solver's coin indices without the log spamming every frame.
- *   - Shop button clicks are a full no-op (they don't call into the real purchase logic at all)
- *     so they can't interfere with the stats you're setting manually from this panel.
+ * instead of guessing from map coordinates. Workflow:
+ *   1. Set the stat panel to whatever combination you want to test.
+ *   2. Click "Record" -- this snapshots the current settings and starts tracking every location
+ *      (coin, robot, gun, boss arena) you touch from this point forward.
+ *   3. Play through the level.
+ *   4. Click "Record" again with new settings to start the next trial (this automatically ends
+ *      the previous one), or click "Export" to download everything gathered so far as a text
+ *      file, grouped by location, showing every settings combination that reached it.
+ *
+ * Other behavior:
+ *   - Coins never despawn when collected (no cash granted, no removal, no fly-away animation).
+ *   - Shop button clicks are a full no-op so they can't interfere with stats set from this panel.
  */
 
 (function () {
@@ -47,7 +48,7 @@
   panel.id = "ju-debug-panel";
   panel.style.cssText =
     "position:fixed;top:8px;right:8px;z-index:999999;background:rgba(40,10,10,0.92);" +
-    "color:#eee;font:12px monospace;padding:8px;border-radius:6px;width:280px;" +
+    "color:#eee;font:12px monospace;padding:8px;border-radius:6px;width:300px;" +
     "box-shadow:0 2px 8px rgba(0,0,0,0.5);";
 
   const rows = UPGRADE_FIELDS.map(
@@ -66,6 +67,11 @@
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
     '<label style="flex:1;">Has Gun</label><input type="checkbox" data-field="wpn"></div>' +
     '<div style="font-size:11px;color:#ccc;margin-bottom:4px;">Shop clicks are a no-op.</div>' +
+    '<div style="display:flex;gap:4px;margin-bottom:4px;">' +
+    '<button id="ju-debug-record" style="flex:1;">Record</button>' +
+    '<button id="ju-debug-export" style="flex:1;">Export</button>' +
+    "</div>" +
+    '<div id="ju-debug-current" style="font-size:11px;color:#ccc;margin-bottom:4px;">Not recording.</div>' +
     '<div id="ju-debug-log" style="max-height:220px;overflow-y:auto;white-space:pre-wrap;border-top:1px solid #555;padding-top:4px;"></div>';
   document.body.appendChild(panel);
 
@@ -112,11 +118,85 @@
   });
 
   // ---------------------------------------------------------------------------------------
+  // Recording
+  // ---------------------------------------------------------------------------------------
+  // Each recording is one trial: a snapshot of the panel's settings at the moment "Record" was
+  // pressed, plus every location touched from then until the next "Record" press (or export).
+  const recordings = []; // [{ settings: {..}, locations: Set<string> }]
+  let current = null;
+
+  function readCurrentSettings() {
+    const settings = {};
+    for (const f of UPGRADE_FIELDS) {
+      settings[f.label] = parseInt(document.querySelector('[data-field="' + f.key + '"]').value, 10) || 0;
+    }
+    settings["Double Jump"] = document.querySelector('[data-field="jmp2"]').checked ? 1 : 0;
+    settings["Has Gun"] = document.querySelector('[data-field="wpn"]').checked ? 1 : 0;
+    return settings;
+  }
+
+  function settingsToString(settings) {
+    return Object.entries(settings)
+      .map(([k, v]) => k + "=" + v)
+      .join(" ");
+  }
+
+  function startRecording() {
+    const settings = readCurrentSettings();
+    current = { settings, locations: new Set() };
+    recordings.push(current);
+    document.getElementById("ju-debug-current").textContent = "Recording: " + settingsToString(settings);
+    log("=== Recording started: " + settingsToString(settings) + " ===");
+  }
+
+  function recordLocation(name) {
+    if (!current) return;
+    if (current.locations.has(name)) return;
+    current.locations.add(name);
+    log("[recorded] " + name + " (" + settingsToString(current.settings) + ")");
+  }
+
+  function exportRecordings() {
+    // Group by location across all recordings, listing every settings combo that reached it.
+    const byLocation = new Map(); // location name -> [settingsString, ...]
+    for (const rec of recordings) {
+      const settingsStr = settingsToString(rec.settings);
+      for (const loc of rec.locations) {
+        if (!byLocation.has(loc)) byLocation.set(loc, []);
+        byLocation.get(loc).push(settingsStr);
+      }
+    }
+    const locationNames = Array.from(byLocation.keys()).sort((a, b) => {
+      // Sort coins/robots numerically by their trailing number, everything else alphabetically.
+      const na = a.match(/(\d+)$/), nb = b.match(/(\d+)$/);
+      if (na && nb && a.replace(na[1], "") === b.replace(nb[1], "")) return parseInt(na[1]) - parseInt(nb[1]);
+      return a.localeCompare(b);
+    });
+    let out = "Exported " + recordings.length + " trial(s), " + byLocation.size + " distinct location(s) touched.\n\n";
+    for (const loc of locationNames) {
+      out += loc + ":\n";
+      for (const s of byLocation.get(loc)) out += "  " + s + "\n";
+    }
+    if (locationNames.length === 0) out += "(nothing recorded yet -- press Record, then play, then Export)\n";
+
+    const blob = new Blob([out], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "johnny_upgrade_debug_recordings.txt";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    log("Exported " + recordings.length + " trial(s) to johnny_upgrade_debug_recordings.txt");
+  }
+
+  document.getElementById("ju-debug-record").addEventListener("click", startRecording);
+  document.getElementById("ju-debug-export").addEventListener("click", exportRecordings);
+
+  // ---------------------------------------------------------------------------------------
   // Hooks
   // ---------------------------------------------------------------------------------------
-  const COIN_LOG_THROTTLE_MS = 5000;
-  const lastCoinLogAt = new Map(); // coin index -> timestamp of last log
-
   function installHooks() {
     const originalIniLevel = window.iniLevel;
     window.iniLevel = function () {
@@ -134,20 +214,42 @@
     };
 
     // Full replacement, not a wrapper -- vanilla coinCode grants cash and removes/animates the
-    // coin away on hit, neither of which we want here. Throttled per coin rather than deduped
-    // forever: standing on the same coin continuously only logs once every 5 seconds, but
-    // leaving and coming back later (including a fresh round) logs again immediately, since
-    // enough time will have naturally passed.
+    // coin away on hit, neither of which we want here.
     window.coinCode = function () {
       if (!Array.isArray(window.coins) || !window.sprt || window.sprt.dd) return;
-      const now = Date.now();
       for (const c of window.coins) {
         if (typeof window.sprtHitTest === "function" && window.sprtHitTest(c)) {
-          const last = lastCoinLogAt.get(c.__debugIndex) || 0;
-          if (now - last >= COIN_LOG_THROTTLE_MS) {
-            lastCoinLogAt.set(c.__debugIndex, now);
-            log("Coin " + (c.__debugIndex + 1) + " touched at (" + Math.round(c.x) + ", " + Math.round(c.y) + ")");
-          }
+          recordLocation("Coin " + (c.__debugIndex + 1));
+        }
+      }
+    };
+
+    // Wrapped, not replaced -- we still want the robot to actually die (so you can keep moving/
+    // testing), just also record it. killEnemy is only called on an already-successful hit.
+    const originalKillEnemy = window.killEnemy;
+    window.killEnemy = function (e, b) {
+      originalKillEnemy.apply(this, arguments);
+      if (e && e.robot && e.__debugIndex !== undefined) {
+        recordLocation("Robot " + (e.__debugIndex + 1));
+      }
+    };
+
+    const originalColgunCode = window.colgunCode;
+    window.colgunCode = function () {
+      const hadGun = !!(window.sprt && window.sprt.colGun);
+      originalColgunCode.apply(this, arguments);
+      if (hadGun) recordLocation("Find the Gun");
+    };
+
+    // Boss arena isn't a single touchable object -- approximate "reached it" as standing within
+    // the boss's floor range, checked every frame the round is active.
+    const originalClockCode = window.clockCode;
+    window.clockCode = function () {
+      originalClockCode.apply(this, arguments);
+      if (window.sprt && window.bossData && window.bossData.range) {
+        const r = window.bossData.range;
+        if (window.sprt.x >= r.l && window.sprt.x <= r.r && window.sprt.y >= r.t && window.sprt.y <= r.b) {
+          recordLocation("Boss Arena");
         }
       }
     };
@@ -159,7 +261,16 @@
   }
 
   function waitForGameThenInstall() {
-    if (window.game && window.iniLevel && window.coinCode && window.shopBtnPress && window.sprtHitTest) {
+    if (
+      window.game &&
+      window.iniLevel &&
+      window.coinCode &&
+      window.killEnemy &&
+      window.colgunCode &&
+      window.clockCode &&
+      window.shopBtnPress &&
+      window.sprtHitTest
+    ) {
       installHooks();
     } else {
       setTimeout(waitForGameThenInstall, 200);
