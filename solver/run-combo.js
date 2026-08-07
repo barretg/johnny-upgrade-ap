@@ -1,14 +1,15 @@
-// Worker: run one ability combo (or a whole planned batch, one at a time) and write its result
-// into the atlas. Safe to launch several of these concurrently -- each writes its own file, and
-// a combo already on disk is skipped, so parallel instances just divide the work.
+// Worker: run ability combos and write the results into the atlas.
 //
-//   node run-combo.js --spd 8 --jmp 4 --dj 0
-//   node run-combo.js --auto 5            # take the 5 most informative undetermined combos
-//   node run-combo.js --shard 0/4         # take every 4th undetermined combo, starting at 0
+// Safe to launch as many of these at once as you have cores/RAM for. Each writes its own file,
+// a combo already on disk is skipped, and each worker re-reads the atlas between combos, so
+// parallel instances pick up each other's results and stop duplicating work.
 //
-// Reserve memory for the visited set: node --max-old-space-size=8192 run-combo.js ...
+//   node --max-old-space-size=4096 run-combo.js --spd 8 --jmp 4 --dj 0 --energy 2
+//   node --max-old-space-size=4096 run-combo.js --loop            # keep taking work until done
+//   node --max-old-space-size=4096 run-combo.js --loop --worker 3/8
+//
+// --worker i/n makes N workers take different slices of each planned batch.
 
-const fs = require('fs');
 const F = require('./fastsim');
 const A = require('./atlas');
 const L = require('./locations');
@@ -28,7 +29,7 @@ function parseArgs(argv) {
 function runOne(combo) {
   const existing = A.loadCombo(combo);
   if (existing) {
-    console.log(`[skip] ${A.comboId(combo)} already in atlas (complete=${existing.complete})`);
+    console.log(`[skip] ${A.comboId(combo)} already in atlas`);
     return existing;
   }
   const t0 = Date.now();
@@ -36,6 +37,8 @@ function runOne(combo) {
     spdTier: combo.s,
     jmpTier: combo.j,
     doubleJump: !!combo.d,
+    energyTier: combo.e,
+    ammoTier: combo.g || 0,
     ...SETTINGS,
   });
   const seconds = (Date.now() - t0) / 1000;
@@ -48,23 +51,16 @@ function runOne(combo) {
     frames[L.ROBOT_INDEX0 + n] = r.shotFrame[eneIdx];
   });
 
-  // "complete" means the BFS exhausted the reachable state space on its own -- no truncation by
-  // the frame budget or the visited-set capacity. Only complete runs can prove a location
-  // UNreachable, so the atlas records the distinction.
+  // "complete" = the BFS exhausted its reachable state space unaided, with no truncation by the
+  // frame budget or the visited-set capacity. Only a complete run can prove a location
+  // UNreachable, so the atlas records the distinction and closure() respects it.
   const complete = !r.stats.truncated && !r.stats.hitFrameLimit;
-  const result = {
-    combo,
-    frames,
-    complete,
-    stats: r.stats,
-    seconds,
-    settings: SETTINGS,
-  };
+  const result = { combo, frames, complete, stats: r.stats, seconds, settings: SETTINGS };
   A.saveCombo(combo, result);
   const found = frames.filter((f) => f >= 0).length;
   console.log(
-    `[done] ${A.comboId(combo)} ${seconds.toFixed(1)}s reached=${found}/${L.N_LOC} ` +
-      `complete=${complete} visited=${r.stats.visited} layers=${r.stats.layers} peak=${r.stats.peak}`
+    `[done] ${A.comboId(combo)} ${seconds.toFixed(0)}s reached=${found}/${L.N_LOC} ` +
+      `complete=${complete} visited=${r.stats.visited} lastFrame=${r.stats.layers * SETTINGS.stride}`
   );
   return result;
 }
@@ -74,27 +70,25 @@ function main() {
   A.saveSettings(SETTINGS);
 
   if (args.spd !== undefined) {
-    runOne({ s: +args.spd, j: +args.jmp, d: +(args.dj || 0) });
+    runOne({ s: +args.spd, j: +args.jmp, d: +(args.dj || 0), e: +(args.energy || 1), g: +(args.ammo || 0) });
     return;
   }
 
-  let n = args.auto ? +args.auto : 1;
-  let shard = null;
-  if (args.shard) {
-    const [i, total] = args.shard.split('/').map(Number);
-    shard = { i, total };
-    n = args.n ? +args.n : 1000;
-  }
+  let wi = 0;
+  let wn = 1;
+  if (args.worker) [wi, wn] = args.worker.split('/').map(Number);
+  const limit = args.n ? +args.n : args.loop ? Infinity : 1;
 
-  for (let k = 0; k < n; k++) {
+  for (let k = 0; k < limit; k++) {
     const known = A.loadAll();
-    let batch = A.planBatch(known, L.N_LOC, shard ? shard.total * 4 : 1);
-    if (shard) batch = batch.filter((_, idx) => idx % shard.total === shard.i);
-    if (batch.length === 0) {
-      console.log('[idle] nothing undetermined left to run');
+    const batch = A.planBatch(known, L.N_LOC, wn * 3);
+    const mine = batch.filter((_, idx) => idx % wn === wi);
+    const pick = (mine[0] || batch[0] || null);
+    if (!pick) {
+      console.log('[idle] lattice fully determined -- nothing left to run');
       return;
     }
-    runOne(batch[0].combo);
+    runOne(pick.combo);
   }
 }
 

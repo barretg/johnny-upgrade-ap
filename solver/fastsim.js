@@ -304,15 +304,80 @@ const S_X = 0,
   S_SC = 9, // facing
   S_HP = 10,
   S_INV = 11,
-  S_N = 12;
+  S_AMMO = 12, // bullets left (getGun: round(ammo.v * 20) = 2 per tier)
+  S_KILL = 13, // bitmask of hazards shot dead this run; killRobot/hitBomb are permanent
+  S_N = 14;
 
 const scratch = new Float64Array(S_N);
+
+// Which per-frame hazard slots a bullet can actually destroy. killEnemy() only handles
+// e.robot, e.bomb and e.boss -- saws and lasers just absorb the shot.
+const KILLABLE = [];
+M.enes.forEach((e, i) => {
+  if (e.typ === 'robot') KILLABLE.push(i);
+});
+for (let i = 0; i < N_BOMB; i++) KILLABLE.push(N_ENE + i);
+
+const ROBOT_HAZARDS = M.enes.map((e, i) => (e.typ === 'robot' ? i : -1)).filter((i) => i >= 0);
 
 // ---------------------------------------------------------------------------
 // One frame. Returns 0 = ok, 1 = dead, 2 = grabbed by the boss gate.
 // Mirrors LevelState.update()'s ordering exactly.
 // ---------------------------------------------------------------------------
-function stepFrame(s, frame, dir, jump, spd, jh, jumpMax) {
+// Bit index within S_KILL for a given hazard slot, or -1 if this run does not track it.
+// Only hazards that actually gate progress are tracked; carrying all 9 bits would blow the
+// 53-bit budget the packed dedup key has to fit in.
+let KILL_BIT = new Int8Array(N_HAZ).fill(-1);
+// Set by search(): called with (hazardSlot, frame) whenever a bullet actually connects, so robot
+// kills are recorded as real events. A robot can ONLY die to a bullet -- killRobot() is reachable
+// from bulletHitEnemy() and nowhere else -- so enemysanity checks are gun-gated by construction.
+let KILL_RECORDER = null;
+
+/**
+ * Fire a bullet and resolve it immediately.
+ *
+ * Resolving on the spot rather than carrying bullets in the state is sound here, not just
+ * cheap: a bullet moves 20px/frame and the player at most 4*spd = 11.2px/frame, so the bullet
+ * always reaches a target before the player could, whichever way either is moving. There is no
+ * way for the player to benefit from a kill "early".
+ */
+function fireBullet(s, frame) {
+  const dirX = s[S_SC] >= 0 ? 1 : -1;
+  let bx = s[S_X] + dirX * 20;
+  const by = s[S_Y] - 60;
+  for (let step = 0; step < 60; step++) {
+    bx += dirX * 20;
+    const f = Math.min(MAXF, frame + step);
+    const bl = bx - 12,
+      br = bx + 12,
+      bt = by - 12,
+      bb = by + 12;
+    // bulletHitWall: any solid stops it.
+    for (let i = 0; i < N_STATIC; i++) {
+      const b = i * 5;
+      if (i === STOMPER_IDX) continue;
+      if (bl < PL[b + 2] && br > PL[b] && bt < PL[b + 3] && bb > PL[b + 1]) return;
+    }
+    // bulletHitEnemy: iterates `spikes`, so static spikes/lasers/saws absorb the shot too.
+    for (let i = 0; i < N_SPIKE; i++) {
+      const b = i * 4;
+      if (bl < SP[b + 2] && br > SP[b] && bt < SP[b + 3] && bb > SP[b + 1]) return;
+    }
+    const base = f * N_HAZ * 4;
+    for (let i = 0; i < N_HAZ; i++) {
+      const bit = KILL_BIT[i];
+      if (bit >= 0 && s[S_KILL] & (1 << bit)) continue; // already dead
+      const b = base + i * 4;
+      if (bl < HZ[b + 2] && br > HZ[b] && bt < HZ[b + 3] && bb > HZ[b + 1]) {
+        if (bit >= 0) s[S_KILL] |= 1 << bit;
+        if (KILL_RECORDER) KILL_RECORDER(i, f);
+        return;
+      }
+    }
+  }
+}
+
+function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
   // invCode
   if (s[S_INV] > 0) {
     s[S_INV]--;
@@ -382,6 +447,17 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax) {
   if (jump && jh !== 0 && s[S_JU] < jumpMax) {
     s[S_VY] = jh;
     s[S_JU]++;
+  }
+  // controls(): firing comes after the jump handler, so a same-frame jump eats the !ju case and
+  // the shot gives no lift. The -12 boost only happens from a standing start, once per landing.
+  if (shoot && s[S_AMMO] > 0) {
+    s[S_AMMO]--;
+    if (!s[S_JU]) {
+      s[S_VY] -= 12;
+      s[S_JU]++;
+    }
+    s[S_VX] = (s[S_SC] === -1 ? -0.8 : 0.8) * -8; // recoil
+    fireBullet(s, frame);
   }
 
   // leftRightCode()
@@ -465,6 +541,8 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax) {
     if (hitK === -1) {
       const base = frame * N_HAZ * 4;
       for (let i = 0; i < N_HAZ; i++) {
+        const bit = KILL_BIT[i];
+        if (bit >= 0 && s[S_KILL] & (1 << bit)) continue; // shot dead earlier this run
         const b = base + i * 4;
         if (l < HZ[b + 2] && r > HZ[b] && t < HZ[b + 3] && bo > HZ[b + 1]) {
           hitK = i;
@@ -513,6 +591,7 @@ const DEFAULTS = {
   hazardPad: 240,
   hashBits: 24,
   energyTier: 1,
+  ammoTier: 0,
   // Per-cell beam. Without it the high-mobility combos generate tens of millions of states that
   // are just "the same spot at every conceivable velocity", and the search drowns before it gets
   // anywhere. Capping how many distinct velocity/jump states survive per (position cell, hazard
@@ -547,8 +626,9 @@ function buildHazardZones(pad) {
   return out;
 }
 
-const ACT_DIR = [0, -1, 1, 0, -1, 1];
-const ACT_JMP = [0, 0, 0, 1, 1, 1];
+const ACT_DIR = [0, -1, 1, 0, -1, 1, 0, -1, 1];
+const ACT_JMP = [0, 0, 0, 1, 1, 1, 0, 0, 0];
+const ACT_SHOOT = [0, 0, 0, 0, 0, 0, 1, 1, 1];
 
 function search(opts = {}) {
   const o = { ...DEFAULTS, ...opts };
@@ -563,10 +643,36 @@ function search(opts = {}) {
 
   const nx = Math.ceil(5600 / o.qPos);
   const ny = Math.ceil(3800 / o.qPos);
-  const nvx = 64;
-  const nvy = 256;
+  // vx normally tops out at 4*spd = 11.2. A damage knockback sets it to +/-43.2, so runs that
+  // can survive a hit need a much wider bucket range; runs at 1 heart never see those values and
+  // keeping their key narrow is what leaves room for the gun's ammo/kill bits under the 53-bit
+  // budget the packed key has to fit in.
+  const nvx = (o.energyTier > 1 ? Math.ceil(44 * o.qVx) : Math.ceil(13 * o.qVx)) * 2 + 4;
+  const nvxOff = nvx >> 1;
+  const nvy = Math.ceil(95 * o.qVy) + Math.ceil(25 * o.qVy) + 4;
+  const nvyOff = Math.ceil(25 * o.qVy) + 2;
   const nphase = Math.ceil(o.phaseMod / o.phaseBucket) + 1;
   const nstom = 35;
+  // Energy only widens the state space when there is more than one heart to spend: at tier 1 any
+  // contact is fatal, so hearts and i-frames are constants and stay out of the key.
+  const trackDamage = o.energyTier > 1;
+  const nhp = trackDamage ? o.energyTier + 1 : 1;
+  const ninv = trackDamage ? 9 : 1;
+
+  // Gun arm. ammoTier 0 means the player has never picked the gun up.
+  const hasGun = (o.ammoTier || 0) > 0;
+  const startAmmo = hasGun ? o.ammoTier * 2 : 0; // getGun(): Math.round(ammo.v * 20)
+  KILL_BIT = new Int8Array(N_HAZ).fill(-1);
+  // Only robots get a kill bit. which-blockers.js shows ene4 is the single hazard that gates
+  // anything, and bombs oscillate rather than patrol so they can always be waited out; a bullet
+  // that hits an untracked hazard still spends the ammo but leaves the hazard standing, which
+  // errs strict rather than permissive.
+  const tracked = o.trackKills || (hasGun ? ROBOT_HAZARDS : []);
+  tracked.forEach((h, bit) => {
+    KILL_BIT[h] = bit;
+  });
+  const nkill = 1 << tracked.length;
+  const nammo = hasGun ? startAmmo + 1 : 1;
 
   let lastPhase = 0; // set by keyOf, consumed by beamAdmit
   function keyOf(s, frame) {
@@ -576,10 +682,10 @@ function search(opts = {}) {
     else if (qx >= nx) qx = nx - 1;
     if (qy < 0) qy = 0;
     else if (qy >= ny) qy = ny - 1;
-    let qvx = Math.round(s[S_VX] * o.qVx) + 32;
+    let qvx = Math.round(s[S_VX] * o.qVx) + nvxOff;
     if (qvx < 0) qvx = 0;
     else if (qvx >= nvx) qvx = nvx - 1;
-    let qvy = Math.round(s[S_VY] * o.qVy) + 64;
+    let qvy = Math.round(s[S_VY] * o.qVy) + nvyOff;
     if (qvy < 0) qvy = 0;
     else if (qvy >= nvy) qvy = nvy - 1;
     const ju = s[S_JU] >= 2 ? 2 : s[S_JU];
@@ -600,6 +706,14 @@ function search(opts = {}) {
     k = k * 3 + ju;
     k = k * nstom + stom;
     k = k * nphase + phase;
+    if (trackDamage) {
+      k = k * nhp + s[S_HP];
+      k = k * ninv + (s[S_INV] >= 64 ? 8 : s[S_INV] >> 3);
+    }
+    if (hasGun) {
+      k = k * nammo + s[S_AMMO];
+      k = k * nkill + s[S_KILL];
+    }
     return k;
   }
 
@@ -670,31 +784,13 @@ function search(opts = {}) {
     if (gunFrame < 0 && l < GUN_BOX[2] && r > GUN_BOX[0] && t < GUN_BOX[3] && b > GUN_BOX[1]) {
       gunFrame = frame;
     }
-    // Robot shootability: a bullet spawns at sprt.y - 60 and flies horizontally, dying ~1000px
-    // out; it stops at the first platform. Record the earliest frame a robot is in clear line.
-    for (let i = 0; i < N_ENE; i++) {
-      if (shotFrame[i] >= 0) continue;
-      if (M.enes[i].typ !== 'robot') continue;
-      const hb = (frame * N_HAZ + i) * 4;
-      const by = s[S_Y] - 60;
-      if (by < HZ[hb + 1] - 12 || by > HZ[hb + 3] + 12) continue;
-      const dir = HZ[hb] > s[S_X] ? 1 : -1;
-      const tx = dir > 0 ? HZ[hb] : HZ[hb + 2];
-      if (Math.abs(tx - s[S_X]) > 1000) continue;
-      if (clearShot(s[S_X], by, tx)) shotFrame[i] = frame;
-    }
   }
 
-  function clearShot(x0, y, x1) {
-    const lo = Math.min(x0, x1),
-      hi = Math.max(x0, x1);
-    for (let i = 0; i < N_STATIC; i++) {
-      const b = i * 5;
-      if (i === STOMPER_IDX) continue;
-      if (lo < PL[b + 2] && hi > PL[b] && y - 12 < PL[b + 3] && y + 12 > PL[b + 1]) return false;
-    }
-    return true;
-  }
+  // A bullet stops on anything in `spikes`, but killEnemy() only actually kills robots, bombs and
+  // the boss -- a saw just eats the shot. Only robot hits are enemysanity checks.
+  KILL_RECORDER = (haz, frame) => {
+    if (haz < N_ENE && M.enes[haz].typ === 'robot' && shotFrame[haz] < 0) shotFrame[haz] = frame;
+  };
 
   // Layers are struct-of-arrays Float64Arrays, grown as needed.
   let cap = 1 << 16;
@@ -716,6 +812,8 @@ function search(opts = {}) {
   scratch[S_SC] = 1;
   scratch[S_HP] = o.energyTier;
   scratch[S_INV] = 0;
+  scratch[S_AMMO] = startAmmo;
+  scratch[S_KILL] = o.forceKill || 0;
   cur.set(scratch, 0);
   curN = 1;
   visited.add(keyOf(scratch, 0));
@@ -738,15 +836,27 @@ function search(opts = {}) {
     nxtN = 0;
     for (let li = 0; li < curN; li++) {
       const base = li * S_N;
-      for (let a = 0; a < 6; a++) {
+      for (let a = 0; a < ACT_DIR.length; a++) {
         const dir = ACT_DIR[a];
         const jmp = ACT_JMP[a];
+        const sht = ACT_SHOOT[a];
         if (jmp && jh === 0) continue;
         if (dir !== 0 && spd === 0) continue;
+        if (sht && !hasGun) continue;
+        if (sht && cur[base + S_AMMO] <= 0) continue;
         for (let k = 0; k < S_N; k++) scratch[k] = cur[base + k];
         let ok = true;
         for (let k = 0; k < o.stride; k++) {
-          const rc = stepFrame(scratch, f + k + 1, dir, jmp && k === 0 ? 1 : 0, spd, jh, jumpMax);
+          const rc = stepFrame(
+            scratch,
+            f + k + 1,
+            dir,
+            jmp && k === 0 ? 1 : 0,
+            spd,
+            jh,
+            jumpMax,
+            sht && k === 0 ? 1 : 0
+          );
           if (rc === 1) {
             ok = false;
             break;
@@ -798,6 +908,7 @@ function search(opts = {}) {
 module.exports = {
   M,
   COINS,
+  KILLABLE,
   N_COIN,
   N_ENE,
   search,
