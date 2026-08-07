@@ -236,9 +236,14 @@
 
     const originalColgunCode = window.colgunCode;
     window.colgunCode = function () {
-      const hadGun = !!(window.sprt && window.sprt.colGun);
+      // BUG (fixed): checking only "did the gun sprite exist before this call" is true on
+      // EVERY frame until the gun is actually collected, regardless of player position -- it
+      // recorded "Find the Gun" on every single frame of every trial. Must check the actual
+      // transition (existed, then destroyed this call), which only happens on real pickup.
+      const hadGunBefore = !!(window.sprt && window.sprt.colGun);
       originalColgunCode.apply(this, arguments);
-      if (hadGun) recordLocation("Find the Gun");
+      const hasGunAfter = !!(window.sprt && window.sprt.colGun);
+      if (hadGunBefore && !hasGunAfter) recordLocation("Find the Gun");
     };
 
     // Boss arena isn't a single touchable object -- approximate "reached it" as standing within
