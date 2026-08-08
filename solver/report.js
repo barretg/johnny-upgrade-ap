@@ -38,18 +38,47 @@ const COVERAGE = argOf('coverage', 0.98);
 // inside Time tier 24 drop out via the existing `t === null` path, falling back to stronger stats.
 const TIME_MARGIN = argOf('time-margin', 1.35);
 
-const DIMS = ['s', 'j', 'd', 'e', 'g', 't'];
-const le = (a, b) => DIMS.every((k) => a[k] <= b[k]);
+// A second atlas swept with the frame-perfect movement techs enabled. Options that only exist
+// (or only get a better Time tier) there are tagged so rules.py can gate them behind yaml.
+//
+// Which tech an option needed is unambiguous without extra sweeps, because of how the arms are
+// split: the energy arm has no gun, so recoil is impossible there; the gun arm has exactly one
+// heart, so any hit is fatal and knockback never fires. No combo has both, so a tech-only option
+// in the energy arm must be knockback, and one in the gun arm must be recoil.
+const TECH_DIR = (() => {
+  const i = process.argv.indexOf('--tech-atlas');
+  if (i > 0) return process.argv[i + 1];
+  const d = path.join(__dirname, 'out-techallowed');
+  return fs.existsSync(d) ? d : null;
+})();
+const techOf = (combo) => ((combo.g || 0) > 0 ? 'recoil' : 'knockback');
 
-/** Minimal elements under componentwise <=, deduped. */
+const DIMS = ['s', 'j', 'd', 'e', 'g', 't'];
+const techName = (p) => p.tech || 'none';
+
+// Needing a tech is itself a cost, so it joins the partial order: "no tech" is below everything,
+// and two different techs are incomparable (neither substitutes for the other). Without this, a
+// tech-only option with the same stats as a plain one could survive the Pareto pass and gate a
+// location behind a yaml setting it does not actually need.
+const techLE = (a, b) => techName(a) === 'none' || techName(a) === techName(b);
+const le = (a, b) => DIMS.every((k) => a[k] <= b[k]) && techLE(a, b);
+const strictlyBetter = (q, p) =>
+  DIMS.some((k) => q[k] < p[k]) || (techName(q) === 'none' && techName(p) !== 'none');
+const sameEverything = (q, p) => DIMS.every((k) => q[k] === p[k]) && techName(q) === techName(p);
+
+/** Minimal elements under componentwise <= (stats plus tech cost), deduped. */
 function paretoMin(points) {
   const out = [];
   for (const p of points) {
-    if (points.some((q) => q !== p && le(q, p) && DIMS.some((k) => q[k] < p[k]))) continue;
-    if (out.some((q) => DIMS.every((k) => q[k] === p[k]))) continue;
+    if (points.some((q) => q !== p && le(q, p) && strictlyBetter(q, p))) continue;
+    if (out.some((q) => sameEverything(q, p))) continue;
     out.push(p);
   }
-  return out.sort((a, b) => a.s - b.s || a.j - b.j || a.d - b.d || a.e - b.e || a.g - b.g || a.t - b.t);
+  return out.sort(
+    (a, b) =>
+      a.s - b.s || a.j - b.j || a.d - b.d || a.e - b.e || a.g - b.g || a.t - b.t ||
+      techName(a).localeCompare(techName(b))
+  );
 }
 
 const via = (p) => (p.g > 0 ? 'gun' : p.e > 1 ? 'damage' : 'base');
@@ -104,6 +133,7 @@ function fmt(p) {
   if (p.e > 1) parts.push(`Energy ${p.e}`);
   if (p.g > 0) parts.push(`Gun AND Ammo ${p.g}`);
   if (p.t > 0) parts.push(`Time ${p.t}`);
+  if (techName(p) !== 'none') parts.push(techName(p) === 'recoil' ? 'RECOIL TECH' : 'KNOCKBACK TECH');
   return '(' + parts.join(' AND ') + ')';
 }
 
@@ -114,9 +144,38 @@ function main() {
     process.exit(1);
   }
   const { reach, frames } = A.closure(known, L.N_LOC);
+
+  let techReach = null;
+  let techFrames = null;
+  if (TECH_DIR) {
+    const techKnown = A.loadAllFrom(TECH_DIR);
+    if (techKnown.size) {
+      const c = A.closure(techKnown, L.N_LOC);
+      techReach = c.reach;
+      techFrames = c.frames;
+      console.log(`tech atlas: ${techKnown.size} combo(s) from ${path.basename(TECH_DIR)}`);
+      const ts = A.settingsOf(TECH_DIR);
+      const os = A.settingsOf(A.OUT);
+      if (ts && os) {
+        const differing = [...new Set([...Object.keys(ts), ...Object.keys(os)])].filter(
+          (k) => JSON.stringify(ts[k]) !== JSON.stringify(os[k])
+        );
+        const onlyTech = differing.every((k) => k === 'recoilBoost' || k === 'knockbackBoost');
+        if (!onlyTech) {
+          console.error(
+            `REFUSING to merge: the tech atlas differs by [${differing.join(', ')}], not just the ` +
+              'tech flags. Comparing arms swept under different discretization is meaningless.'
+          );
+          process.exit(1);
+        }
+      }
+    }
+  }
+
   const combos = A.allCombos();
   const perLoc = [];
   let unknownPairs = 0;
+  let techOnly = 0;
 
   for (let i = 0; i < L.N_LOC; i++) {
     const pts = [];
@@ -124,6 +183,23 @@ function main() {
       const id = A.comboId(c);
       const st = reach.get(id)[i];
       if (st === 2) unknownPairs++;
+
+      // A tech-enabled run can either open a combo the default sweep could not reach at all, or
+      // reach the same one fast enough to need a lower Time tier. Both count as tech-dependent
+      // alternatives and are recorded alongside the plain ones.
+      if (techReach) {
+        const tf = techFrames.get(id)[i];
+        if (techReach.get(id)[i] === 1 && tf >= 0) {
+          const tt = F.timeTierForFrames(Math.ceil((tf + 1) * TIME_MARGIN));
+          const baseT =
+            st === 1 ? F.timeTierForFrames(Math.ceil((frames.get(id)[i] + 1) * TIME_MARGIN)) : null;
+          if (tt !== null && (baseT === null || tt < baseT)) {
+            pts.push({ s: c.s, j: c.j, d: c.d, e: c.e, g: c.g || 0, t: tt, tech: techOf(c) });
+            techOnly++;
+          }
+        }
+      }
+
       if (st !== 1) continue;
       // +1: update() runs clockCode before coinCode, and coinCode tests the position produced by
       // the PREVIOUS frame's movement. So a coin touched at position-frame f is only banked on

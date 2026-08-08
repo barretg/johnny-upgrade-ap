@@ -58,7 +58,15 @@ function runOne(combo) {
   // UNreachable, so the atlas records the distinction and closure() respects it.
   const complete = !r.stats.truncated && !r.stats.hitFrameLimit;
   const result = { combo, frames, complete, stats: r.stats, seconds, settings: SETTINGS };
-  A.saveCombo(combo, result);
+  // Never let a storage hiccup kill a worker -- the result is deterministic, so the worst case is
+  // that some later worker recomputes this combo.
+  let stored = false;
+  try {
+    stored = A.saveCombo(combo, result);
+  } catch (e) {
+    console.log(`[warn] ${A.comboId(combo)} could not be stored: ${e.message}`);
+  }
+  if (!stored) console.log(`[warn] ${A.comboId(combo)} not stored; it will be recomputed later`);
   const found = frames.filter((f) => f >= 0).length;
   console.log(
     `[done] ${A.comboId(combo)} ${seconds.toFixed(0)}s reached=${found}/${L.N_LOC} ` +
@@ -155,7 +163,10 @@ function main() {
     const known = A.loadAll();
     const batch = A.planBatch(known, L.N_LOC, wn * 3);
     const mine = batch.filter((_, idx) => idx % wn === wi);
-    const pick = (mine[0] || batch[0] || null);
+    // Falling back to batch[0] made every worker whose slice had emptied pile onto the SAME
+    // combo -- wasted work, and two processes writing one result at once. Offset into whatever
+    // is left by worker index instead, so they spread out as the queue drains.
+    const pick = mine[0] || batch[wi % Math.max(1, batch.length)] || null;
     if (!pick) {
       console.log('[idle] lattice fully determined -- nothing left to run');
       return;

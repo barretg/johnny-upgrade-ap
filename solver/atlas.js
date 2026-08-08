@@ -82,13 +82,45 @@ function saveSettings(settings) {
   fs.writeFileSync(p, JSON.stringify(settings, null, 2));
 }
 
+// A short synchronous sleep, so a rename can be retried without busy-spinning a core that the
+// sweep would rather spend on searching.
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Write-then-rename, so a killed process can never leave a half-parsed file for other workers.
+ *
+ * Two things make this harder than it looks under N parallel workers:
+ *   - the planner can hand the same combo to more than one worker, so the temp name must be
+ *     unique per process or they clobber each other's partial writes
+ *   - on Windows a rename onto a file another process currently has open fails with EPERM, and
+ *     every worker re-reads the whole atlas between combos, so that collision is routine
+ *
+ * Results are deterministic, so whoever lands first is as good as anyone else: if the
+ * destination already exists we simply drop our copy. Returns false if the result could not be
+ * stored, which is recoverable -- some later worker will just recompute that combo.
+ */
 function saveCombo(c, result) {
   ensureDirs();
-  // Write-then-rename so a killed process can never leave a half-parsed file behind for the
-  // other workers to trip over.
-  const tmp = comboPath(c) + '.tmp';
+  const dest = comboPath(c);
+  const tmp = `${dest}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(result));
-  fs.renameSync(tmp, comboPath(c));
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      fs.renameSync(tmp, dest);
+      return true;
+    } catch (e) {
+      if (fs.existsSync(dest)) break; // another worker already stored it
+      sleepMs(25 * (attempt + 1));
+    }
+  }
+  try {
+    fs.unlinkSync(tmp);
+  } catch {
+    /* nothing useful to do if even the cleanup fails */
+  }
+  return fs.existsSync(dest);
 }
 
 function loadCombo(c) {
@@ -109,6 +141,33 @@ function loadAll() {
     if (r) map.set(comboId(c), { combo: c, result: r });
   }
   return map;
+}
+
+/**
+ * Load a second atlas from an arbitrary directory, so one process can compare arms -- e.g. the
+ * default sweep against one run with the frame-perfect movement techs enabled. Returns an empty
+ * map if the directory is not there.
+ */
+function loadAllFrom(dir) {
+  const comboDir = path.join(path.resolve(dir), 'combo');
+  const map = new Map();
+  if (!fs.existsSync(comboDir)) return map;
+  for (const c of allCombos()) {
+    const p = path.join(comboDir, comboId(c) + '.json');
+    if (!fs.existsSync(p)) continue;
+    try {
+      map.set(comboId(c), { combo: c, result: JSON.parse(fs.readFileSync(p, 'utf8')) });
+    } catch {
+      // half-written by a killed process; treat as absent
+    }
+  }
+  return map;
+}
+
+/** The settings a given atlas directory was built with, or null. */
+function settingsOf(dir) {
+  const p = path.join(path.resolve(dir), 'settings.json');
+  return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null;
 }
 
 /**
@@ -200,6 +259,8 @@ module.exports = {
   saveCombo,
   loadCombo,
   loadAll,
+  loadAllFrom,
+  settingsOf,
   closure,
   undetermined,
   planBatch,
