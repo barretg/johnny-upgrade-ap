@@ -160,7 +160,8 @@ function main() {
   const limit = args.n ? +args.n : args.loop ? Infinity : 1;
 
   for (let k = 0; k < limit; k++) {
-    const known = A.loadAll();
+    // Incremental: results are immutable once written, so only new files are parsed.
+    const known = A.loadAllCached();
     const batch = A.planBatch(known, L.N_LOC, wn * 3);
     const mine = batch.filter((_, idx) => idx % wn === wi);
     // Falling back to batch[0] made every worker whose slice had emptied pile onto the SAME
