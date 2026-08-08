@@ -26,6 +26,18 @@ const argOf = (n, dflt) => { const i = process.argv.indexOf('--' + n); return i 
 const MAX_TERMS = argOf('terms', 4);
 const COVERAGE = argOf('coverage', 0.98);
 
+// Execution slack on the round timer.
+//
+// The solver plays optimally: it changes input every `stride` frames and never wastes one. A
+// person does not, so a route the search finishes with two frames to spare is a route nobody can
+// actually complete. Requiring the optimal frame count x this factor pushes those up a Time tier
+// and keeps TAS-level timing out of logic entirely -- it is not a difficulty setting, it is the
+// correction for the search being inhumanly efficient.
+//
+// Only ever raises a requirement, so it cannot make a seed unbeatable. Options that no longer fit
+// inside Time tier 24 drop out via the existing `t === null` path, falling back to stronger stats.
+const TIME_MARGIN = argOf('time-margin', 1.35);
+
 const DIMS = ['s', 'j', 'd', 'e', 'g', 't'];
 const le = (a, b) => DIMS.every((k) => a[k] <= b[k]);
 
@@ -115,8 +127,8 @@ function main() {
       if (st !== 1) continue;
       // +1: update() runs clockCode before coinCode, and coinCode tests the position produced by
       // the PREVIOUS frame's movement. So a coin touched at position-frame f is only banked on
-      // frame f+1, after the timer has ticked f+1 times.
-      const t = F.timeTierForFrames(frames.get(id)[i] + 1);
+      // frame f+1, after the timer has ticked f+1 times. TIME_MARGIN then adds human slack on top.
+      const t = F.timeTierForFrames(Math.ceil((frames.get(id)[i] + 1) * TIME_MARGIN));
       if (t === null) continue; // slower than Time tier 24 allows, so not actually doable
       pts.push({ s: c.s, j: c.j, d: c.d, e: c.e, g: c.g || 0, t });
     }

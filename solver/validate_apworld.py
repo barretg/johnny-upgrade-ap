@@ -150,6 +150,7 @@ MAXED = {
     items.PROGRESSIVE_ENERGY: 5,
     items.PROGRESSIVE_AMMO: 10,
     items.PROGRESSIVE_GUN_POWER: 5,
+    items.PROGRESSIVE_COIN_MULTIPLIER: 10,
 }
 EMPTY = {items.PROGRESSIVE_SPEED: 1}  # generate_early guarantees one Progressive Speed
 
@@ -250,6 +251,50 @@ print("       distribution: " + ", ".join(f"{g}:{spread[g]}" for g in sorted(spr
 check(
     items.item_table[items.PROGRESSIVE_COIN_MULTIPLIER].classification is _ItemClassification.progression,
     "Progressive Coin Multiplier is progression (else logic cannot see it)",
+)
+
+print("\ngun-locked shop tracks")
+# shop.js only calls addITM for Ammo / Gun Power when game.ldat.wpn.v is set; otherwise both
+# slots render as "LOCKED -- find a gun to unlock!" with an EMPTY price array, so no tier of
+# either track can be bought until the gun has been picked up.
+GUN_LOCKED = (items.PROGRESSIVE_AMMO, items.PROGRESSIVE_GUN_POWER)
+for track in GUN_LOCKED:
+    tiers = len(locations.SHOP_PRICES[track])
+    names = [locations.shop_location_name(track, t) for t in range(1, tiers + 1)]
+    check(
+        all(locations.location_table[n].requirement == locations.NEEDS_GUN for n in names),
+        f"all {tiers} '{track}' shop tiers are gated on the gun",
+    )
+other = [
+    locations.shop_location_name(tr, t)
+    for tr, pr in locations.SHOP_PRICES.items()
+    if tr not in GUN_LOCKED
+    for t in range(1, len(pr) + 1)
+]
+check(
+    not [n for n in other if locations.location_table[n].requirement == locations.NEEDS_GUN],
+    "no other shop track is gun-gated",
+)
+
+# And confirm it survives rule construction: gun-gated tiers must be unreachable when the gun
+# location is not, even with every item in the pool.
+reach_no_gun = {**MAXED, "__reach__": {locations.FIND_THE_GUN: False}}
+built = {}
+for track in GUN_LOCKED:
+    for t in range(1, len(locations.SHOP_PRICES[track]) + 1):
+        name = locations.shop_location_name(track, t)
+        r = _CanReach(locations.FIND_THE_GUN)
+        gate = locations.SHOP_MULTIPLIER_GATE.get(name, 0)
+        if gate:
+            r = r & _Has(items.PROGRESSIVE_COIN_MULTIPLIER, count=gate)
+        built[name] = r
+check(
+    all(not r.test(reach_no_gun) for r in built.values()),
+    "gun-gated tiers stay unreachable while 'Find the Gun' is not reachable",
+)
+check(
+    all(r.test({**MAXED, "__reach__": {locations.FIND_THE_GUN: True}}) for r in built.values()),
+    "gun-gated tiers become reachable once the gun is",
 )
 
 print("\nlocation table")

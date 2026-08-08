@@ -1,4 +1,4 @@
 .claude
 *__pycache__
 scratch-work
-solver/out
+solver/out*

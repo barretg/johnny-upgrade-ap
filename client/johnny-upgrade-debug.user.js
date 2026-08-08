@@ -100,7 +100,10 @@
     const field = UPGRADE_FIELDS.find((f) => f.key === key);
     const max = field ? field.max : 10;
     const tier = Math.max(0, Math.min(max, rawValue));
-    ldat[key].v = tier * 0.1;
+    // tier / 10, NOT tier * 0.1 -- they differ in binary floating point at tier 3
+    // (3 * 0.1 = 0.30000000000000004), and iniNRG counts hearts with an unrounded
+    // `for (i = 0; i < nrg.v * 10; i++)`, which then draws FOUR hearts for Energy 3.
+    ldat[key].v = tier / 10;
     if (key === "tim" && typeof window.tim === "number") {
       window.tim = Math.round(ldat.tim.v * 10 * 6 + 3);
     }

@@ -6,7 +6,9 @@
 //
 //   node --max-old-space-size=4096 run-combo.js --spd 8 --jmp 4 --dj 0 --energy 2
 //   node --max-old-space-size=4096 run-combo.js --loop            # keep taking work until done
-//   node --max-old-space-size=4096 run-combo.js --loop --worker 3/8
+//   node run-combo.js --spawn 16                # spawn 16 workers, one tagged central log
+//   node run-combo.js --spawn 16 --mem 4000     # ...with a smaller heap per worker
+//   node --max-old-space-size=4096 run-combo.js --loop --worker 3/8   # one worker by hand
 //
 // --worker i/n makes N workers take different slices of each planned batch.
 
@@ -65,9 +67,79 @@ function runOne(combo) {
   return result;
 }
 
+/**
+ * Spawn N worker processes and funnel all of their output into one tagged stream.
+ *
+ * Each child is this same script with --loop --worker i/N, so they coordinate through the atlas
+ * exactly as separate shells would -- this just saves opening N terminals and interleaves the
+ * logs. Every line is prefixed with its worker id and mirrored to out/sweep.log.
+ */
+function spawnWorkers(n, mem, extra) {
+  const { spawn } = require('child_process');
+  const fs = require('fs');
+  const path = require('path');
+  A.ensureDirs();
+  const logPath = path.join(A.OUT, 'sweep.log');
+  const logFile = fs.createWriteStream(logPath, { flags: 'a' });
+  const stamp = () => new Date().toISOString().slice(11, 19);
+
+  function emit(tag, line) {
+    if (!line) return;
+    const out = `[${stamp()}] [${tag}] ${line}`;
+    console.log(out);
+    logFile.write(out + '\n');
+  }
+
+  emit('main', `spawning ${n} worker(s), ${mem}MB each -> ${logPath}`);
+  let alive = n;
+  const t0 = Date.now();
+
+  for (let i = 0; i < n; i++) {
+    const tag = 'w' + String(i).padStart(2, '0');
+    const child = spawn(
+      process.execPath,
+      [`--max-old-space-size=${mem}`, __filename, '--loop', '--worker', `${i}/${n}`, ...extra],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    // Children emit whole lines; buffer partial ones so a tag never lands mid-line.
+    let buf = '';
+    const onData = (chunk) => {
+      buf += chunk.toString();
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const l of lines) emit(tag, l.trimEnd());
+    };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    child.on('exit', (code) => {
+      if (buf) emit(tag, buf.trimEnd());
+      alive--;
+      emit('main', `${tag} exited (${code}); ${alive} still running`);
+      if (alive === 0) {
+        emit('main', `all workers done in ${((Date.now() - t0) / 60000).toFixed(1)} min`);
+        logFile.end();
+      }
+    });
+  }
+
+  // Ctrl-C should take the whole pool down, not orphan the children.
+  process.on('SIGINT', () => {
+    emit('main', 'interrupted -- stopping workers');
+    process.exit(1);
+  });
+}
+
 function main() {
   const args = parseArgs(process.argv);
   A.saveSettings(SETTINGS);
+
+  if (args.spawn) {
+    const n = +args.spawn;
+    const passthrough = [];
+    if (args.n) passthrough.push('--n', args.n);
+    spawnWorkers(n, +(args.mem || 6000), passthrough);
+    return;
+  }
 
   if (args.spd !== undefined) {
     runOne({ s: +args.spd, j: +args.jmp, d: +(args.dj || 0), e: +(args.energy || 1), g: +(args.ammo || 0) });

@@ -558,13 +558,21 @@
       const count = counts[name] || 0;
       if (count !== receivedCounts[name]) log("Set " + field + " to tier " + count + " (" + name + ")");
       receivedCounts[name] = count;
-      // Energy is the one track with a nonzero vanilla baseline: iniLdat starts nrg.v at 0.1,
-      // i.e. one heart, and the shop ladder counts up from there. Setting it to count * 0.1
-      // would mean 0 items = 0 hearts and 1 item = 1 heart -- and 1 heart still dies to the
-      // first hit (killSprite destroys the sprite once nrg.length hits 0). Logic requires
-      // 2 hearts for the damage-boost routes, so that off-by-one would make every route the
-      // generator thinks is open with 1 Progressive Energy actually impossible.
-      ldat[field].v = (field === "nrg" ? count + 1 : count) * 0.1;
+      // Two corrections here, both load-bearing:
+      //
+      // 1. Energy is the one track with a nonzero vanilla baseline: iniLdat starts nrg.v at 0.1,
+      //    i.e. one heart, and the shop ladder counts up from there. Setting it to count * 0.1
+      //    would mean 0 items = 0 hearts and 1 item = 1 heart -- and 1 heart still dies to the
+      //    first hit (killSprite destroys the sprite once nrg.length hits 0). Logic requires
+      //    2 hearts for the damage-boost routes, so that off-by-one would make every route the
+      //    generator thinks is open with 1 Progressive Energy actually impossible.
+      //
+      // 2. Divide by 10 rather than multiplying by 0.1. They differ in binary floating point at
+      //    tier 3 (3 * 0.1 = 0.30000000000000004), and iniNRG counts hearts with an unrounded
+      //    `for (i = 0; i < nrg.v * 10; i++)`, so that value draws FOUR hearts instead of three.
+      //    Vanilla has the same defect via its v += 0.1 accumulation; setting v directly lets us
+      //    match the heart count the solver actually modelled.
+      ldat[field].v = (field === "nrg" ? count + 1 : count) / 10;
     }
     const doubleJumpCount = counts["Double Jump"] || 0;
     if (doubleJumpCount > 0 && ldat.jmp2.v === 0) log("Double Jump unlocked.");
@@ -937,6 +945,11 @@
       window.sprt.colGun.destroy();
       window.sprt.colGun = null;
       if (window.game && window.game.ldat) window.game.ldat.wpn.v = 0.1;
+      // iniLevel already chose its branch before this hook ran: seeing wpn.v == 0 it created the
+      // pickup instead of calling getGun(), so sprt.ammo is still undefined and controls() would
+      // refuse to fire all round (`sprt.ammo && sprt.ammo > 0`). Setting the flag alone is not
+      // enough -- getGun() is what loads the armed sprite and converts Ammo tiers into bullets.
+      if (typeof window.getGun === "function") window.getGun();
     }
   }
 
@@ -1059,7 +1072,24 @@
     rebuildProgressiveState(allNames); // also calls renderStatus()
     applyAdditiveItems(newAdditiveNames);
   };
+  // shop.js decides whether the Ammo and Gun Power tracks exist at all from game.ldat.wpn.v --
+  // when it is falsy both slots render as "LOCKED -- find a gun to unlock!" with an empty price
+  // array, so no tier of either can be bought. wpn.v is normally only set by walking into the
+  // pickup, and the disconnect wipe clears it, so restore it straight from server-authoritative
+  // checked state. Doing it here rather than only inside filterAlreadyCheckedSpawns() means it
+  // does not depend on having entered a level first -- otherwise opening the shop right after a
+  // reconnect would show both tracks locked despite the check already being done.
+  function restoreGunFlagFromChecks() {
+    if (!window.game || !window.game.ldat) return;
+    if (window.game.ldat.wpn.v) return;
+    if (!ap.isLocationChecked("Find the Gun")) return;
+    window.game.ldat.wpn.v = 0.1;
+    if (typeof window.saveStats === "function") window.saveStats();
+    log("Gun restored from checked locations (Ammo / Gun Power unlocked in shop).");
+  }
+
   ap.onCheckedLocationsUpdated = () => {
+    restoreGunFlagFromChecks();
     if (window.iniLevel) filterAlreadyCheckedSpawns();
     renderStatus();
   };

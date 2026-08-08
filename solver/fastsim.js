@@ -333,6 +333,19 @@ let KILL_BIT = new Int8Array(N_HAZ).fill(-1);
 // from bulletHitEnemy() and nowhere else -- so enemysanity checks are gun-gated by construction.
 let KILL_RECORDER = null;
 
+// Movement techs that are real but frame-perfect, so they belong behind yaml settings rather
+// than in default logic. Set per search() call from opts.
+let ALLOW_RECOIL_BOOST = true;
+let ALLOW_KNOCKBACK_BOOST = true;
+
+// Extra clearance (px) demanded from MOVING hazards only -- the robots, saws and bombs that HZK
+// marks. Static spikes and lasers are deliberately excluded: their geometry never changes, so a
+// player can learn the exact safe line and pixel-tight is fair. A dodge against something that
+// moves is a timing read, and the search makes those on the exact frame every time -- including
+// walking through a patrolling robot on precisely the frames its i-frames and patrol phase line
+// up. This margin is what keeps those out of logic.
+let HAZARD_MARGIN = 0;
+
 /**
  * Fire a bullet and resolve it immediately.
  *
@@ -456,7 +469,11 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
       s[S_VY] -= 12;
       s[S_JU]++;
     }
-    s[S_VX] = (s[S_SC] === -1 ? -0.8 : 0.8) * -8; // recoil
+    // Recoil REPLACES vx with 8 in the direction opposite your facing. At low Speed that is
+    // faster than you can run, so turning around and shooting is a genuine movement tech --
+    // neat, but frame-perfect and not beginner level, hence the switch. The vertical bullet-hop
+    // above is unaffected; only the horizontal boost is suppressed.
+    if (ALLOW_RECOIL_BOOST) s[S_VX] = (s[S_SC] === -1 ? -0.8 : 0.8) * -8;
     fireBullet(s, frame);
   }
 
@@ -544,7 +561,9 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
         const bit = KILL_BIT[i];
         if (bit >= 0 && s[S_KILL] & (1 << bit)) continue; // shot dead earlier this run
         const b = base + i * 4;
-        if (l < HZ[b + 2] && r > HZ[b] && t < HZ[b + 3] && bo > HZ[b + 1]) {
+        // HZK marks the movers (enemies and bombs); lasers and static spikes get no margin.
+        const m = HZK[i] ? HAZARD_MARGIN : 0;
+        if (l < HZ[b + 2] + m && r > HZ[b] - m && t < HZ[b + 3] + m && bo > HZ[b + 1] - m) {
           hitK = i;
           break;
         }
@@ -559,7 +578,11 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
         const cx = (HZ[b] + HZ[b + 2]) / 2;
         s[S_SC] = s[S_X] > cx ? -1 : 1;
       }
-      s[S_VX] = (s[S_SC] === -1 ? -0.8 : 0.8) * -54;
+      // Knockback REPLACES vx with 43.2 away from the hazard -- roughly 4x max run speed. Turning
+      // around on the hit so "away" points where you want to go launches you across gaps that are
+      // otherwise unreachable. That is a separate trick from simply tanking a hit for the
+      // i-frames, which stays available either way (inv and the heart cost are untouched here).
+      s[S_VX] = ALLOW_KNOCKBACK_BOOST ? (s[S_SC] === -1 ? -0.8 : 0.8) * -54 : 0;
       s[S_VY] = -20;
       s[S_INV] = 60;
     }
@@ -660,6 +683,9 @@ function search(opts = {}) {
   const ninv = trackDamage ? 9 : 1;
 
   // Gun arm. ammoTier 0 means the player has never picked the gun up.
+  ALLOW_RECOIL_BOOST = o.recoilBoost !== false;
+  ALLOW_KNOCKBACK_BOOST = o.knockbackBoost !== false;
+  HAZARD_MARGIN = o.hazardMargin || 0;
   const hasGun = (o.ammoTier || 0) > 0;
   const startAmmo = hasGun ? o.ammoTier * 2 : 0; // getGun(): Math.round(ammo.v * 20)
   KILL_BIT = new Int8Array(N_HAZ).fill(-1);

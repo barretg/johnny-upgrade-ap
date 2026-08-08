@@ -26,7 +26,11 @@ const MAX_SPD = 10;
 const MAX_JMP = 10;
 const MAX_ENERGY = 5; // hearts; iniLdat starts the player at nrg.v = 0.1, i.e. 1 heart
 
-const OUT = path.join(__dirname, 'out');
+// JU_ATLAS_DIR lets a second arm (e.g. one with the frame-perfect techs enabled) be swept into
+// its own directory instead of colliding with the default one.
+const OUT = process.env.JU_ATLAS_DIR
+  ? path.resolve(process.env.JU_ATLAS_DIR)
+  : path.join(__dirname, 'out');
 const COMBO_DIR = path.join(OUT, 'combo');
 
 function ensureDirs() {
