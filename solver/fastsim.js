@@ -338,13 +338,11 @@ let KILL_RECORDER = null;
 let ALLOW_RECOIL_BOOST = true;
 let ALLOW_KNOCKBACK_BOOST = true;
 
-// Extra clearance (px) demanded from MOVING hazards only -- the robots, saws and bombs that HZK
-// marks. Static spikes and lasers are deliberately excluded: their geometry never changes, so a
-// player can learn the exact safe line and pixel-tight is fair. A dodge against something that
-// moves is a timing read, and the search makes those on the exact frame every time -- including
-// walking through a patrolling robot on precisely the frames its i-frames and patrol phase line
-// up. This margin is what keeps those out of logic.
-let HAZARD_MARGIN = 0;
+// A "hazard clearance margin" was tried here and removed: inflating the player's damage box makes
+// contact MORE likely, and with spare hearts each extra contact is a free 43.2px/frame knockback
+// launch. Measured effect was the opposite of the intent -- a 16px margin let spd7/jmp3/DJ/e5
+// reach 238 coins instead of 224. Keeping frame-perfect play out of logic is the time margin's
+// job (report.js) plus disabling the boosts below.
 
 /**
  * Fire a bullet and resolve it immediately.
@@ -561,9 +559,7 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
         const bit = KILL_BIT[i];
         if (bit >= 0 && s[S_KILL] & (1 << bit)) continue; // shot dead earlier this run
         const b = base + i * 4;
-        // HZK marks the movers (enemies and bombs); lasers and static spikes get no margin.
-        const m = HZK[i] ? HAZARD_MARGIN : 0;
-        if (l < HZ[b + 2] + m && r > HZ[b] - m && t < HZ[b + 3] + m && bo > HZ[b + 1] - m) {
+        if (l < HZ[b + 2] && r > HZ[b] && t < HZ[b + 3] && bo > HZ[b + 1]) {
           hitK = i;
           break;
         }
@@ -685,7 +681,6 @@ function search(opts = {}) {
   // Gun arm. ammoTier 0 means the player has never picked the gun up.
   ALLOW_RECOIL_BOOST = o.recoilBoost !== false;
   ALLOW_KNOCKBACK_BOOST = o.knockbackBoost !== false;
-  HAZARD_MARGIN = o.hazardMargin || 0;
   const hasGun = (o.ammoTier || 0) > 0;
   const startAmmo = hasGun ? o.ammoTier * 2 : 0; // getGun(): Math.round(ammo.v * 20)
   KILL_BIT = new Int8Array(N_HAZ).fill(-1);

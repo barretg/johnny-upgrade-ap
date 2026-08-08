@@ -13,7 +13,6 @@
 // Env overrides let a second arm be swept without editing this file. Pair them with
 // JU_ATLAS_DIR so each arm gets its own atlas -- atlas.js refuses to mix results computed under
 // different settings, which is exactly the protection you want here.
-const num = (k, d) => (process.env[k] !== undefined ? Number(process.env[k]) : d);
 const bool = (k, d) => (process.env[k] !== undefined ? !/^(0|false|no)$/i.test(process.env[k]) : d);
 
 module.exports = {
@@ -21,11 +20,11 @@ module.exports = {
   // These decide what counts as a route a person could actually pull off, as opposed to one that
   // is merely physically possible. They change results, so they are part of the atlas identity.
 
-  // Clearance (px) required from MOVING hazards only: robots, saws, bombs. Static spikes and
-  // lasers are excluded -- fixed geometry can be learned exactly, a moving dodge is a timing read
-  // the search always wins. Also what stops the search walking through a patrolling robot on the
-  // exact frames its i-frames and patrol phase align.
-  hazardMargin: num('JU_HAZARD_MARGIN', 8),
+  // A hazard clearance margin was tried and dropped -- see the note in fastsim.js. Inflating the
+  // damage box made contact more likely, and each extra contact is a free knockback launch, so it
+  // LOOSENED logic instead of tightening it. Phase-exact robot walkthroughs are accepted as
+  // something players work out; anything that proves genuinely unfair gets corrected by hand
+  // through the test harness.
 
   // Gun recoil sets |vx| to 8 opposite your facing -- faster than you can run at low Speed, so
   // turning around and shooting is a real but frame-perfect speed tech. Off by default.
