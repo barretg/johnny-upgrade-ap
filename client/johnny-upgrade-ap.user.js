@@ -91,7 +91,8 @@
     "box-shadow:0 2px 8px rgba(0,0,0,0.5);";
   panel.innerHTML =
     '<div id="ap-ju-header" style="font-weight:bold;margin-bottom:4px;cursor:pointer;display:flex;justify-content:space-between;">' +
-    "<span>Archipelago</span><span id=\"ap-ju-toggle\">&#9660;</span></div>" +
+    '<span>Archipelago <span style="font-weight:normal;color:#889;font-size:10px;">(H to hide)</span></span>' +
+    "<span id=\"ap-ju-toggle\">&#9660;</span></div>" +
     '<div id="ap-ju-body">' +
     '<input id="ap-ju-server" placeholder="archipelago.gg:38281" style="width:100%;margin-bottom:2px;box-sizing:border-box;">' +
     '<input id="ap-ju-slot" placeholder="Slot name" style="width:100%;margin-bottom:2px;box-sizing:border-box;">' +
@@ -104,6 +105,22 @@
     '<div id="ap-ju-log" style="margin-top:6px;max-height:100px;overflow-y:auto;white-space:pre-wrap;"></div>' +
     "</div>";
   document.body.appendChild(panel);
+
+  // "H" fully hides the panel (header and all), unlike the header click which just collapses the
+  // body. Bound on window in the CAPTURE phase so it still works while the game canvas has focus,
+  // and left to propagate afterwards since the game does nothing with H.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "h" && e.key !== "H") return;
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      // Never swallow the letter while a field has focus, or the server address becomes untypable.
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      panel.style.display = panel.style.display === "none" ? "" : "none";
+    },
+    true
+  );
 
   document.getElementById("ap-ju-header").addEventListener("click", () => {
     const body = document.getElementById("ap-ju-body");
