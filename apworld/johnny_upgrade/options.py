@@ -24,9 +24,11 @@ class DamageBoostsInLogic(DefaultOnToggle):
 class Coinsanity(Toggle):
     """Adds a location check for every collectible coin on the map (246 checks).
 
-    Coins no longer grant local cash when collected -- cash instead comes from received
-    Coin Bundle items -- so this purely controls whether each coin pickup is also an
-    Archipelago location check.
+    ON: each coin is an Archipelago check and grants no local cash when collected. Cash comes
+    from received Coin Bundle items and passive income instead.
+
+    OFF: the coins are not checks, so they keep their normal vanilla payout and top up your cash
+    exactly as they always did (on top of Coin Bundles and passive income).
     """
     display_name = "Coinsanity"
 

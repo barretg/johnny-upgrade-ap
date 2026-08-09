@@ -35,10 +35,11 @@
  *   "saw" hazards and 6 killable "robot" enemies in a FIXED order. Only the robot entries, at
  *   original indices [2,3,4,5,6,7], are Archipelago locations ("Robot 1".."Robot 6"), because
  *   killEnemy() only has damage-response branches for `e.robot`/`e.bomb`, never `e.saw`.
- * - Coin pickups (coinCode) no longer grant cash directly per the agreed design -- they're pure
- *   location checks. Cash instead comes from received Coin Bundle items, scaled by the
- *   Progressive Coin Multiplier tier using the same +50%/tier formula the vanilla game used for
- *   coin pickups (game.ldat.csh.v += value * (1 + 0.5 * multiplierTier)).
+ * - Coin pickups (coinCode) depend on the coinsanity option. With it ON they are pure location
+ *   checks and grant no cash, so cash comes only from received Coin Bundle items (scaled by the
+ *   Progressive Coin Multiplier tier: csh.v += value * (1 + 0.5 * tier)) plus passive income.
+ *   With it OFF the coins are not checks at all, so vanilla payout is left completely alone and
+ *   cash comes from both sources.
  * - Finding the gun (colgunCode) sets `game.ldat.wpn.v = 0.1` exactly once and is its own
  *   location ("Find the Gun"), independent of any received item.
  * - Shop purchases (shopBtnPress) are location-check triggers ONLY -- they no longer grant the
@@ -768,14 +769,21 @@
 
     const originalCoinCode = window.coinCode;
     window.coinCode = function () {
+      // With coinsanity OFF the coins are not checks, so there is no reason to take their payout
+      // away -- let vanilla behave exactly as it always did (csh.v += 1 + multi.v*5, HUD refresh,
+      // fly-away animation). Cash then comes from BOTH map coins and received Coin Bundles.
+      if (!(ap.slotData && ap.slotData.coinsanity)) {
+        originalCoinCode.apply(this, arguments);
+        return;
+      }
+
       const before = window.coins ? window.coins.slice() : [];
       const cashBefore = window.game && window.game.ldat ? window.game.ldat.csh.v : null;
       originalCoinCode.apply(this, arguments);
-      // Vanilla coinCode grants local cash per coin (`csh.v += 1 + multi.v*5`) AND refreshes the
-      // in-level cash HUD text (updateCoinTxt) using that inflated value, before we get a
-      // chance to revert it -- per the agreed design, map coins are pure location checks now
-      // and grant no local cash (cash instead comes only from received Coin Bundle items and
-      // passive income), so revert the value and refresh the HUD again to match.
+      // Vanilla coinCode grants local cash per coin AND refreshes the in-level cash HUD text
+      // (updateCoinTxt) using that inflated value before we get a chance to revert it. With
+      // coinsanity ON map coins are pure location checks, so revert the value and refresh the
+      // HUD again to match.
       if (cashBefore !== null) {
         window.game.ldat.csh.v = cashBefore;
         refreshCoinDisplay();
