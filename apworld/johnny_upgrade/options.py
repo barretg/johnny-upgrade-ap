@@ -21,7 +21,7 @@ class DamageBoostsInLogic(DefaultOnToggle):
     display_name = "Damage Boosts In Logic"
 
 
-class Coinsanity(Toggle):
+class Coinsanity(DefaultOnToggle):
     """Adds a location check for every collectible coin on the map (246 checks).
 
     ON: each coin is an Archipelago check and grants no local cash when collected. Cash comes
@@ -33,7 +33,7 @@ class Coinsanity(Toggle):
     display_name = "Coinsanity"
 
 
-class Enemysanity(Toggle):
+class Enemysanity(DefaultOnToggle):
     """Adds a location check for defeating each killable enemy on the map (6 checks).
 
     Only the 6 "robot" enemies count, not the bombs yet.
