@@ -34,8 +34,7 @@ class Coinsanity(Toggle):
 class Enemysanity(Toggle):
     """Adds a location check for defeating each killable enemy on the map (6 checks).
 
-    Only the 6 "robot" enemies count -- the 2 spinning saws are indestructible hazards,
-    same as the map's spikes, and are never location checks.
+    Only the 6 "robot" enemies count, not the bombs yet.
     """
     display_name = "Enemysanity"
 
