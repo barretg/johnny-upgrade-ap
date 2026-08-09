@@ -121,12 +121,14 @@ all_ids += [gr.GUN_REQUIREMENT_ID, gr.BOSS_ARENA_REQUIREMENT_ID]
 check(all(0 <= i < len(CLASSES) for i in all_ids), "every class id is in range")
 check(all(len(c) > 0 for c in CLASSES), "no class is empty")
 
-ALLOWED = {"speed", "jump", "double", "energy", "ammo", "time"}
+ALLOWED = {"speed", "jump", "double", "energy", "ammo", "time", "tech"}
 check(all(set(o) <= ALLOWED for c in CLASSES for o in c), "no unknown requirement keys")
 
 print("\ntiers fit the item pool")
 TIERS = items.UPGRADE_TRACK_TIERS
-worst = {k: max((o.get(k, 0) for c in CLASSES for o in c), default=0) for k in ALLOWED}
+# "tech" is a string tag, not a tier, so it stays out of the numeric maxima below.
+NUMERIC = ALLOWED - {"tech", "double"}
+worst = {k: max((o.get(k, 0) for c in CLASSES for o in c), default=0) for k in NUMERIC}
 check(worst["speed"] <= TIERS[items.PROGRESSIVE_SPEED], f"max speed {worst['speed']} <= {TIERS[items.PROGRESSIVE_SPEED]}")
 check(worst["jump"] <= TIERS[items.PROGRESSIVE_JUMP_POWER], f"max jump {worst['jump']} <= {TIERS[items.PROGRESSIVE_JUMP_POWER]}")
 check(worst["time"] <= TIERS[items.PROGRESSIVE_TIME_LIMIT], f"max time {worst['time']} <= {TIERS[items.PROGRESSIVE_TIME_LIMIT]}")
@@ -141,6 +143,24 @@ print("\ndamage boosts disabled")
 no_dmg = [i for i, c in enumerate(CLASSES) if not [o for o in c if o.get("energy", 1) <= 1]]
 check(not no_dmg, f"every class keeps a route without damage boosts (bad: {no_dmg[:5]})")
 
+print("\nmovement-tech tagging")
+ALL_ON = {"damage": True, "recoil": True, "knockback": True}
+ALL_OFF = {"damage": False, "recoil": False, "knockback": False}
+tech_terms = [o for c in CLASSES for o in c if o.get("tech")]
+kinds = {}
+for o in tech_terms:
+    kinds[o["tech"]] = kinds.get(o["tech"], 0) + 1
+check(bool(tech_terms), f"tech-tagged alternatives exist: {kinds}")
+check(
+    set(kinds) <= {"recoil", "knockback"},
+    f"only known tech names are used (got {sorted(set(kinds))})",
+)
+# The whole point of these being off by default: nothing may depend on them exclusively.
+orphan = [
+    i for i, c in enumerate(CLASSES) if not [o for o in c if not o.get("tech") and o.get("energy", 1) <= 1]
+]
+check(not orphan, f"every class keeps a tech-free, damage-free alternative (bad: {orphan[:5]})")
+
 print("\nrule translation")
 MAXED = {
     items.PROGRESSIVE_SPEED: 10,
@@ -154,33 +174,60 @@ MAXED = {
 }
 EMPTY = {items.PROGRESSIVE_SPEED: 1}  # generate_early guarantees one Progressive Speed
 
-for allow in (True, False):
+SETTING_COMBOS = [
+    ("all off (strictest)", ALL_OFF),
+    ("damage only", {**ALL_OFF, "damage": True}),
+    ("recoil only", {**ALL_OFF, "recoil": True}),
+    ("knockback only", {**ALL_OFF, "knockback": True}),
+    ("all on (loosest)", ALL_ON),
+]
+for label, allow in SETTING_COMBOS:
     built = [rules._class_rule(i, allow) for i in range(len(CLASSES))]
-    label = "damage on " if allow else "damage off"
-    check(all(r is None or r.test(MAXED) for r in built), f"{label}: every class satisfiable with all items")
+    check(
+        all(r is None or r.test(MAXED) for r in built),
+        f"{label}: every class satisfiable with all items",
+    )
     trivial = sum(1 for r in built if r is None or r.test(EMPTY))
     check(trivial < len(CLASSES), f"{label}: {trivial}/{len(CLASSES)} classes free at start (not all)")
 
-# Turning damage boosts off must never make a rule EASIER.
-on = [rules._class_rule(i, True) for i in range(len(CLASSES))]
-off = [rules._class_rule(i, False) for i in range(len(CLASSES))]
-looser = []
-for i, (a, b) in enumerate(zip(on, off)):
-    for combo in itertools.product([0, 2, 5, 10], repeat=3):
-        inv = {
-            items.PROGRESSIVE_SPEED: combo[0],
-            items.PROGRESSIVE_JUMP_POWER: combo[1],
-            items.PROGRESSIVE_AMMO: combo[2],
-            items.PROGRESSIVE_ENERGY: 5,
-            items.PROGRESSIVE_TIME_LIMIT: 24,
-            items.DOUBLE_JUMP: 1,
-        }
-        ta = True if a is None else a.test(inv)
-        tb = True if b is None else b.test(inv)
-        if tb and not ta:
-            looser.append((i, combo))
-            break
-check(not looser, f"disabling damage boosts never loosens a rule (bad: {looser[:3]})")
+
+def inventories():
+    """A spread of plausible item states to compare rules over."""
+    for c in itertools.product([0, 2, 5, 10], repeat=3):
+        for energy in (0, 4):
+            yield {
+                items.PROGRESSIVE_SPEED: c[0],
+                items.PROGRESSIVE_JUMP_POWER: c[1],
+                items.PROGRESSIVE_AMMO: c[2],
+                items.PROGRESSIVE_ENERGY: energy,
+                items.PROGRESSIVE_TIME_LIMIT: 24,
+                items.DOUBLE_JUMP: 1,
+            }
+
+
+def truth(rule, inv):
+    return True if rule is None else rule.test(inv)
+
+
+# Every setting only ever ADDS alternatives, so turning one on must never make a rule harder and
+# turning one off must never make it easier. Check each toggle independently against "all off".
+strict = [rules._class_rule(i, ALL_OFF) for i in range(len(CLASSES))]
+for label, allow in SETTING_COMBOS[1:]:
+    loosened = [rules._class_rule(i, allow) for i in range(len(CLASSES))]
+    bad = []
+    for i, (s, l) in enumerate(zip(strict, loosened)):
+        for inv in inventories():
+            if truth(s, inv) and not truth(l, inv):
+                bad.append(i)
+                break
+    check(not bad, f"enabling '{label}' never makes a rule harder (bad: {bad[:3]})")
+
+# ...and the strictest setting must still be satisfiable everywhere, which is what makes all
+# three safe to default off.
+check(
+    all(r is None or r.test(MAXED) for r in strict),
+    "with every setting off, all classes remain satisfiable",
+)
 
 print("\nspot checks against hand-derived logic")
 COIN = gr.COIN_REQUIREMENT_IDS
@@ -200,7 +247,15 @@ def has_opt(coin_no, **kw):
 check(opts(2) == [{"speed": 1}], "Coin 2 is Speed 1 only")
 check(has_opt(5, speed=1, jump=1), "Coin 5 keeps the Jump 1 route")
 check(has_opt(5, speed=1, ammo=1), "Coin 5 has the bullet-hop (Ammo 1) alternative")
-check(has_opt(11, speed=2), "Coin 11 is reachable at Speed 2")
+# Coin 11 sits inside the crusher's trigger band, so the fast route grabs it and then dies -- fine,
+# because the client sends the check on pickup. It used to show a bare "Speed 2", but the 1.35x
+# execution margin no longer fits that inside the 3-second base timer, so the no-Time alternative
+# now costs more Speed. Assert the shape rather than the exact tier, which the margin can move.
+check(has_opt(11, speed=1, time=1), "Coin 11 reachable at Speed 1 + Time 1")
+check(
+    any(o.get("time", 0) == 0 for o in opts(11)),
+    f"Coin 11 still has a no-Time alternative (got {opts(11)})",
+)
 check(has_opt(12, speed=5, time=1), "Coin 12 is Speed 5 + Time 1")
 check(all(o.get("ammo", 0) > 0 for i in gr.ENEMY_REQUIREMENT_IDS for o in CLASSES[i]), "every robot check requires ammo")
 check(all(o.get("ammo", 0) == 0 for o in CLASSES[gr.GUN_REQUIREMENT_ID]), "Find the Gun never requires the gun")
@@ -225,7 +280,7 @@ check(len(sphere1) < 74, f"only {len(sphere1)}/74 shop checks are ungated (not a
 
 # The EXP shop entry must end up strictly harder than a bare multiplier gate: it should demand
 # the same movement the deepest area does.
-xp_rule = rules._class_rule(locations.BOSS_ARENA_REQUIREMENT, True)
+xp_rule = rules._class_rule(locations.BOSS_ARENA_REQUIREMENT, ALL_ON)
 check(xp_rule is not None, "the deepest-area requirement is a real (non-empty) rule")
 check(not xp_rule.test({items.PROGRESSIVE_SPEED: 1}), "Double Jump is not reachable at game start")
 check(xp_rule.test(MAXED), "Double Jump is reachable with everything")

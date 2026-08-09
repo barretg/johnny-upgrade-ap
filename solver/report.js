@@ -314,6 +314,9 @@ function writePython(perLoc, unknownPairs, ran, total) {
   py.push('         when the "damage boosts in logic" yaml setting is off.');
   py.push('  ammo   Progressive Ammo count; also implies CanReachLocation("Find the Gun")');
   py.push('  time   Progressive Time Limit count');
+  py.push('  tech   "recoil" or "knockback" if this alternative needs a frame-perfect movement');
+  py.push('         trick. Absent means it does not. Both are off by default in yaml; every');
+  py.push('         location also has at least one tech-free alternative.');
   py.push('  via    "base" | "damage" | "gun", the route this option depends on');
   py.push('"""');
   py.push('');
@@ -324,10 +327,13 @@ function writePython(perLoc, unknownPairs, ran, total) {
     if (p.e > 1) o.energy = p.e;
     if (p.g) o.ammo = p.g;
     if (p.t) o.time = p.t;
+    // Frame-perfect movement tech this alternative depends on, if any. rules.py drops these
+    // unless the matching yaml setting is on.
+    if (techName(p) !== 'none') o.tech = techName(p);
     return (
       '{' +
       Object.entries(o)
-        .map(([k, v]) => `"${k}": ${v === true ? 'True' : v}`)
+        .map(([k, v]) => `"${k}": ${v === true ? 'True' : typeof v === 'string' ? `"${v}"` : v}`)
         .join(', ') +
       '}'
     );

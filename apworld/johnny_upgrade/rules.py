@@ -80,21 +80,30 @@ def _option_rule(option: dict) -> Optional[Rule]:
     return rule
 
 
-def _class_rule(class_id: int, allow_damage_boosts: bool) -> Optional[Rule]:
+def _allowed(option: dict, allow: dict) -> bool:
+    """Whether a single alternative survives the player's difficulty settings."""
+    # Needing more than the one free heart means tanking a hit for the i-frames.
+    if option.get("energy", 1) > 1 and not allow["damage"]:
+        return False
+    tech = option.get("tech")
+    if tech is not None and not allow.get(tech, False):
+        return False
+    return True
+
+
+def _class_rule(class_id: int, allow: dict) -> Optional[Rule]:
     """Translate one requirement class (a list of alternatives, ORed) into a Rule.
 
     Returns None when the class imposes no requirement at all, i.e. some alternative is
     satisfiable with nothing.
     """
     options = REQUIREMENT_CLASSES[class_id]
-    if not allow_damage_boosts:
-        # Any alternative needing more than the one free heart is only reachable by tanking a
-        # hit for the i-frames. The solver confirms every location also has a non-damage route,
-        # so this never empties a class -- but fall back rather than produce an unfillable
-        # location if that ever regresses.
-        filtered = [o for o in options if o.get("energy", 1) <= 1]
-        if filtered:
-            options = filtered
+    # The solver guarantees every location keeps at least one alternative with no damage boost
+    # and no movement tech, so no combination of these settings can empty a class. Fall back to
+    # the unfiltered list rather than produce an unfillable location if that ever regresses.
+    filtered = [o for o in options if _allowed(o, allow)]
+    if filtered:
+        options = filtered
 
     rule: Optional[Rule] = None
     for option in options:
@@ -106,15 +115,22 @@ def _class_rule(class_id: int, allow_damage_boosts: bool) -> Optional[Rule]:
 
 
 def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
-    allow_damage_boosts = bool(world.options.damage_boosts_in_logic)
+    # Which categories of advanced play this player's yaml puts in logic. Every one of these
+    # only ever ADDS alternatives, so turning them all off yields the strictest possible logic
+    # and can never make a seed unbeatable.
+    allow = {
+        "damage": bool(world.options.damage_boosts_in_logic),
+        "recoil": bool(world.options.recoil_boosts_in_logic),
+        "knockback": bool(world.options.knockback_boosts_in_logic),
+    }
 
-    # 254 locations share only ~175 distinct requirement classes, so build each rule once and
+    # 254 locations share only ~200 distinct requirement classes, so build each rule once and
     # reuse the object rather than reconstructing thousands of near-identical rule trees.
     rule_cache: dict[int, Optional[Rule]] = {}
 
     def rule_for(class_id: int) -> Optional[Rule]:
         if class_id not in rule_cache:
-            rule_cache[class_id] = _class_rule(class_id, allow_damage_boosts)
+            rule_cache[class_id] = _class_rule(class_id, allow)
         return rule_cache[class_id]
 
     for name, data in location_table.items():
@@ -152,7 +168,7 @@ def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
             # entered -- so it is gated on exploration reaching the deepest area rather than on
             # the multiplier. See XP_SHOP_LOCATION in locations.py.
             if name == XP_SHOP_LOCATION:
-                xp_rule = _class_rule(BOSS_ARENA_REQUIREMENT, allow_damage_boosts)
+                xp_rule = _class_rule(BOSS_ARENA_REQUIREMENT, allow)
                 if xp_rule is not None:
                     rule = xp_rule if rule is None else rule & xp_rule
 
@@ -165,7 +181,7 @@ def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
         & Has(PROGRESSIVE_AMMO, count=BOSS_AMMO_TIER)
         & Has(PROGRESSIVE_TIME_LIMIT, count=BOSS_TIME_TIER)
     )
-    arena_rule = _class_rule(BOSS_ARENA_REQUIREMENT, allow_damage_boosts)
+    arena_rule = _class_rule(BOSS_ARENA_REQUIREMENT, allow)
     if arena_rule is not None:
         goal_rule = goal_rule & arena_rule
     world.set_completion_rule(goal_rule)

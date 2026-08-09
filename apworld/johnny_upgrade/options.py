@@ -64,10 +64,44 @@ class PassiveIncomeAmount(Range):
     default = 1
 
 
+class RecoilBoostsInLogic(Toggle):
+    """Allow routes that use the laser gun's recoil as a movement tech.
+
+    shoot() sets your horizontal speed to 8 in the direction OPPOSITE your facing, replacing
+    whatever it was. Below about Speed 4 that is faster than you can run, so turning around and
+    firing is a genuine speed boost -- but it needs a frame-perfect turnaround, which is not
+    something to expect of a first-time player.
+
+    Off by default. The solver found this only opens ~40 shortcuts across the map, and every
+    location it touches is reachable without it, so enabling this simply gives the generator
+    cheaper alternatives rather than unlocking anything new.
+    """
+    display_name = "Recoil Boosts In Logic"
+
+
+class KnockbackBoostsInLogic(Toggle):
+    """Allow routes that use damage knockback to launch across gaps (a BLJ-style trick).
+
+    killSprite sets your horizontal speed to 43.2 away from whatever hit you -- roughly four
+    times max run speed. Turning around on the hit so "away" points where you want to go throws
+    you across gaps that are otherwise out of reach. It is frame-perfect and quite advanced.
+
+    This is SEPARATE from Damage Boosts In Logic: that one is about tanking a hit for the
+    invulnerability frames to walk through an enemy, which stays available either way. This is
+    specifically about weaponising the knockback velocity for distance.
+
+    Off by default. It is by far the bigger of the two techs -- roughly 1,300 shortcuts across
+    187 locations -- but again, nothing depends on it exclusively.
+    """
+    display_name = "Knockback Boosts In Logic"
+
+
 @dataclass
 class JohnnyUpgradeOptions(PerGameCommonOptions):
     coinsanity: Coinsanity
     enemysanity: Enemysanity
     damage_boosts_in_logic: DamageBoostsInLogic
+    recoil_boosts_in_logic: RecoilBoostsInLogic
+    knockback_boosts_in_logic: KnockbackBoostsInLogic
     passive_income_seconds: PassiveIncomeSeconds
     passive_income_amount: PassiveIncomeAmount
