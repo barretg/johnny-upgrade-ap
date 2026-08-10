@@ -4,6 +4,7 @@ from rule_builder.rules import CanReachLocation, Has, Rule
 
 from .items import (
     DOUBLE_JUMP,
+    LASER_GUN,
     PROGRESSIVE_AMMO,
     PROGRESSIVE_COIN_MULTIPLIER,
     PROGRESSIVE_ENERGY,
@@ -14,7 +15,6 @@ from .items import (
 )
 from .locations import (
     BOSS_ARENA_REQUIREMENT,
-    FIND_THE_GUN,
     NEEDS_GUN,
     REQUIREMENT_CLASSES,
     SHOP_MULTIPLIER_GATE,
@@ -62,11 +62,12 @@ def _option_rule(option: dict) -> Optional[Rule]:
     if energy > 1:
         parts.append(Has(PROGRESSIVE_ENERGY, count=energy - 1))
 
-    # Ammo implies owning the gun -- it is the pickup that sets game.ldat.wpn.v, and getGun()
-    # is what turns Ammo tiers into actual bullets.
+    # Any alternative that fires a bullet needs the Laser Gun item as well as the Ammo tiers --
+    # getGun() is what turns Ammo into actual bullets, and it now runs off the received item
+    # rather than off walking into the map's pickup. Reaching the pickup is irrelevant here.
     ammo = option.get("ammo", 0)
     if ammo > 0:
-        parts.append(CanReachLocation(FIND_THE_GUN) & Has(PROGRESSIVE_AMMO, count=ammo))
+        parts.append(Has(LASER_GUN) & Has(PROGRESSIVE_AMMO, count=ammo))
 
     time = option.get("time", 0)
     if time > 0:
@@ -145,7 +146,7 @@ def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
         if requirement is None:
             rule = None
         elif requirement == NEEDS_GUN:
-            rule = CanReachLocation(FIND_THE_GUN)
+            rule = Has(LASER_GUN)
         else:
             rule = rule_for(requirement)
 
@@ -176,7 +177,7 @@ def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
             world.set_rule(location, rule)
 
     goal_rule = (
-        CanReachLocation(FIND_THE_GUN)
+        Has(LASER_GUN)
         & Has(PROGRESSIVE_GUN_POWER, count=BOSS_GUN_POWER_TIER)
         & Has(PROGRESSIVE_AMMO, count=BOSS_AMMO_TIER)
         & Has(PROGRESSIVE_TIME_LIMIT, count=BOSS_TIME_TIER)

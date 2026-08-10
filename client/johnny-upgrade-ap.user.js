@@ -40,8 +40,17 @@
  *   Progressive Coin Multiplier tier: csh.v += value * (1 + 0.5 * tier)) plus passive income.
  *   With it OFF the coins are not checks at all, so vanilla payout is left completely alone and
  *   cash comes from both sources.
- * - Finding the gun (colgunCode) sets `game.ldat.wpn.v = 0.1` exactly once and is its own
- *   location ("Find the Gun"), independent of any received item.
+ * - The gun is fully decoupled from its pickup. Vanilla colgunCode sets `game.ldat.wpn.v = 0.1`
+ *   and calls getGun() on contact; here contact only sends the "Find the Gun" check, and being
+ *   armed comes solely from receiving the Laser Gun item. That means both directions have to be
+ *   handled explicitly, because iniLevel branches on `wpn.v` and does exactly one of the two:
+ *     * armed but check not yet sent -> iniLevel would skip creating the pickup entirely, making
+ *       the location unreachable. So the iniLevel hook forces `wpn.v = 0` across the original
+ *       call to guarantee the pickup spawns, then re-arms afterwards.
+ *     * check already sent but item not received -> the pickup must not come back, and Johnny
+ *       must stay unarmed. filterAlreadyCheckedSpawns() destroys it without arming.
+ *   Since the badge no longer represents a gun you collect, its art is replaced with the
+ *   Archipelago logo -- see installApGunSprite() and assets/make_gun_sprite.py.
  * - Shop purchases (shopBtnPress) are location-check triggers ONLY -- they no longer grant the
  *   upgrade tier themselves (that comes from receiving the matching Progressive item). See the
  *   design discussion in the apworld's rules.py/locations.py for why.
@@ -576,6 +585,22 @@
   // session could never report its goal.
   let goalSent = false;
 
+  function hasLaserGun() {
+    return (receivedCounts["Laser Gun"] || 0) > 0;
+  }
+
+  // Load the armed sprite and turn the Ammo tiers into actual bullets. Safe to call whenever --
+  // it no-ops outside a round and when already armed. (getGun itself is hooked in installHooks to
+  // stop it clearing the pickup, so this doesn't have to worry about that.)
+  function armGunIfNeeded() {
+    if (typeof window.getGun !== "function") return;
+    // dsp.ammo is created by addDSP() and only exists while a round is running; getGun() writes
+    // to it unguarded, so calling this on the title/shop screen would throw.
+    if (!window.sprt || !window.dsp || !window.dsp.ammo) return;
+    if (window.sprt.ammo !== undefined) return; // already armed this round
+    window.getGun();
+  }
+
   // Rebuild every progressive tier from the FULL item history (safe to call repeatedly, e.g.
   // once per ReceivedItems packet including replays after a reconnect) since setting `.v`
   // directly is idempotent.
@@ -607,6 +632,21 @@
       //    match the heart count the solver actually modelled.
       ldat[field].v = (field === "nrg" ? count + 1 : count) / 10;
     }
+    // The Laser Gun is a plain unlock rather than a tier, and `wpn.v` drives two separate things:
+    // whether the shop offers the Ammo / Gun Power tracks at all, and which branch iniLevel takes.
+    // Keep it exactly in step with item ownership -- nothing else is allowed to set it any more.
+    const hadGun = receivedCounts["Laser Gun"] > 0;
+    const hasGun = (counts["Laser Gun"] || 0) > 0;
+    receivedCounts["Laser Gun"] = counts["Laser Gun"] || 0;
+    ldat.wpn.v = hasGun ? 0.1 : 0;
+    if (hasGun && !hadGun) {
+      log("Laser Gun received -- Ammo / Gun Power unlocked in the shop.");
+      // Arm mid-round too: the current level was built on the unarmed branch, so sprt.ammo is
+      // undefined and controls() would refuse to fire (`sprt.ammo && sprt.ammo > 0`) until the
+      // next round otherwise.
+      armGunIfNeeded();
+    }
+
     const doubleJumpCount = counts["Double Jump"] || 0;
     if (doubleJumpCount > 0 && ldat.jmp2.v === 0) log("Double Jump unlocked.");
     ldat.jmp2.v = doubleJumpCount > 0 ? 0.1 : 0;
@@ -664,7 +704,9 @@
       return;
     }
 
-    if (!(name in UPGRADE_FIELD_BY_ITEM) && name !== "Double Jump") {
+    // Double Jump and Laser Gun are unlocks applied from the full item history in
+    // rebuildProgressiveState, not additively here -- so they are expected, not unknown.
+    if (!(name in UPGRADE_FIELD_BY_ITEM) && name !== "Double Jump" && name !== "Laser Gun") {
       log("Don't know how to apply item: " + name);
     }
   }
@@ -728,9 +770,38 @@
     // capture the ALREADY-wrapped function as its "original".
     hooksInstalled = true;
 
+    // Swap the pickup art before any level can build its sprite from the cache.
+    installApGunSprite();
+
+    // getGun() opens with `sprt.colGun = null`, because in vanilla the only route into it is
+    // having just collected the pickup. Here the pickup is an independent location that is very
+    // often still uncollected when the Laser Gun item arrives, and colgunCode early-returns on a
+    // null colGun -- so an unguarded getGun() would leave the pickup sprite sitting on screen,
+    // permanently uncollectable. Hooking getGun rather than each caller matters: the Level state's
+    // create() calls it AGAIN right after iniLevel() (`if (game.ldat.wpn.v) { getGun(); }`), so
+    // fixing it up around our own call site alone would still be undone a moment later.
+    const originalGetGun = window.getGun;
+    window.getGun = function () {
+      const pickup = window.sprt ? window.sprt.colGun : null;
+      originalGetGun.apply(this, arguments);
+      if (window.sprt && pickup && pickup.game) window.sprt.colGun = pickup;
+    };
+
+    // iniLevel does `if (!game.ldat.wpn.v) { create the colGun pickup } else { getGun() }` -- one
+    // or the other, never both. Since owning the Laser Gun item no longer implies having collected
+    // the pickup, an armed player would otherwise never see it again and "Find the Gun" would be
+    // permanently unreachable. Force the pickup branch for the original call, then re-arm.
     const originalIniLevel = window.iniLevel;
     window.iniLevel = function () {
-      originalIniLevel.apply(this, arguments);
+      const ldat = window.game ? window.game.ldat : null;
+      const savedWpn = ldat ? ldat.wpn.v : null;
+      if (ldat) ldat.wpn.v = 0;
+      try {
+        originalIniLevel.apply(this, arguments);
+      } finally {
+        if (ldat) ldat.wpn.v = savedWpn;
+      }
+      if (hasLaserGun()) armGunIfNeeded();
       filterAlreadyCheckedSpawns();
     };
 
@@ -830,12 +901,21 @@
       }
     };
 
-    const originalColgunCode = window.colgunCode;
+    // Replaced outright rather than wrapped. Vanilla's body is
+    //   `if (!sprt.colGun) return;
+    //    if (!sprt.dd && sprtHitTest(sprt.colGun)) { fxPlay(sfx.fxFanfare); game.ldat.wpn.v = 0.1;
+    //                                               sprt.colGun.destroy(); getGun(); }`
+    // and the last two thirds of that -- arming Johnny -- is exactly what must no longer happen on
+    // contact. Wrapping it would mean letting getGun() run and then trying to unwind a texture
+    // swap mid-round; reproducing the four-line hit test is both shorter and far less fragile.
     window.colgunCode = function () {
-      const before = window.game && window.game.ldat ? window.game.ldat.wpn.v : 0;
-      originalColgunCode.apply(this, arguments);
-      const after = window.game && window.game.ldat ? window.game.ldat.wpn.v : 0;
-      if (!before && after) ap.checkLocation("Find the Gun");
+      const sprt = window.sprt;
+      if (!sprt || !sprt.colGun) return;
+      if (sprt.dd || !window.sprtHitTest(sprt.colGun)) return;
+      if (typeof window.fxPlay === "function" && window.sfx) window.fxPlay(window.sfx.fxFanfare);
+      sprt.colGun.destroy();
+      sprt.colGun = null;
+      ap.checkLocation("Find the Gun");
     };
 
     const originalShopBtnPress = window.shopBtnPress;
@@ -940,8 +1020,11 @@
     const upgradesEl = document.getElementById("ap-ju-upgrades");
     const shopEl = document.getElementById("ap-ju-shop");
     if (!upgradesEl || !shopEl) return;
-    const upgradeLines = [];
-    const shopLines = [];
+    // The gun has no shop track of its own, so it gets a leading row on the received side only --
+    // and it is the single most important thing to be able to see at a glance, since without it
+    // the Ammo and Gun Power tiers you may already own do nothing.
+    const upgradeLines = ["Gun: " + (hasLaserGun() ? "yes" : "no")];
+    const shopLines = ["-"];
     for (const [itemName, label] of TRACK_DISPLAY_ORDER) {
       const maxTier = maxTierFor(itemName);
       const received = itemName === "Double Jump" ? (receivedCounts[itemName] > 0 ? 1 : 0) : receivedCounts[itemName] || 0;
@@ -990,16 +1073,56 @@
         }
       }
     }
+    // The pickup is a location like any other: once checked it stops spawning. It does NOT arm
+    // Johnny -- that is the Laser Gun item's job alone (handled in rebuildProgressiveState and the
+    // iniLevel hook), so deliberately no wpn.v write and no getGun() call here.
     if (window.sprt && window.sprt.colGun && ap.isLocationChecked("Find the Gun")) {
       window.sprt.colGun.destroy();
       window.sprt.colGun = null;
-      if (window.game && window.game.ldat) window.game.ldat.wpn.v = 0.1;
-      // iniLevel already chose its branch before this hook ran: seeing wpn.v == 0 it created the
-      // pickup instead of calling getGun(), so sprt.ammo is still undefined and controls() would
-      // refuse to fire all round (`sprt.ammo && sprt.ammo > 0`). Setting the flag alone is not
-      // enough -- getGun() is what loads the armed sprite and converts Ammo tiers into bullets.
-      if (typeof window.getGun === "function") window.getGun();
     }
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Archipelago-branded gun pickup badge.
+  //
+  // The pickup is drawn from the "sheetGunSymb" spritesheet: 10 frames of 120x120, a red/orange/
+  // yellow starburst with a green ray gun inside it, animated by nothing more than a vertical bob.
+  // Since the gun is an Archipelago item now rather than something you collect, the badge shows
+  // the Archipelago logo instead. assets/make_gun_sprite.py does the compositing offline against
+  // the game's own SDK zip and prints the data URI below -- rerun it to regenerate.
+  //
+  // Inlining it as a data URI is what keeps this simple: no cross-origin fetch of the logo at
+  // runtime, no tainted canvas, no @grant. And because "sheetGunSymb" has exactly one use site in
+  // the whole game (level.js's `isprt.create(..., "sheetGunSymb")`), overwriting the cache entry
+  // itself means vanilla picks the new art up with no further patching and the idle animation
+  // keeps working untouched.
+  // ---------------------------------------------------------------------------------------
+  const AP_GUN_SPRITE_DATA_URI =
+    "data:image/png;base64,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";
+
+  let gunSpriteInstalled = false;
+
+  function installApGunSprite() {
+    if (gunSpriteInstalled) return;
+    if (!window.game || !window.game.cache) return;
+    gunSpriteInstalled = true;
+    const img = new Image();
+    img.onload = function () {
+      try {
+        // Phaser 2.6.2's addSpriteSheet(key, url, data, frameWidth, frameHeight) builds its
+        // BaseTexture and frameData straight from the passed <img>, so no loader round trip is
+        // needed. A null url is fine -- _resolveURL no-ops unless cache.autoResolveURL is set.
+        window.game.cache.addSpriteSheet("sheetGunSymb", null, img, 120, 120);
+        log("Gun pickup badge replaced with the Archipelago logo.");
+      } catch (e) {
+        // Purely cosmetic, so never let it take the rest of the client down.
+        log("Could not replace the gun badge sprite: " + e);
+      }
+    };
+    img.onerror = function () {
+      log("Gun badge sprite failed to decode -- leaving the vanilla art in place.");
+    };
+    img.src = AP_GUN_SPRITE_DATA_URI;
   }
 
   function waitForGameThenInstall() {
@@ -1010,6 +1133,8 @@
       window.killEnemy &&
       window.shopBtnPress &&
       window.colgunCode &&
+      window.sprtHitTest && // our colgunCode replacement calls it directly
+      window.getGun &&
       window.bossHit &&
       window.addITM &&
       window.clockCode
@@ -1077,7 +1202,7 @@
     renderStatus();
   };
   // Wipe the local save completely. All authoritative state lives on the server (items drive
-  // every upgrade tier, checked locations drive the gun and which pickups still exist, and cash
+  // every upgrade tier and the gun, checked locations drive which pickups still exist, and cash
   // is mirrored to DataStorage under _cashKey), so a disconnected client should hold nothing.
   //
   // This reuses the game's own reset -- title.js's confirm-reset button runs exactly
@@ -1121,24 +1246,7 @@
     rebuildProgressiveState(allNames); // also calls renderStatus()
     applyAdditiveItems(newAdditiveNames);
   };
-  // shop.js decides whether the Ammo and Gun Power tracks exist at all from game.ldat.wpn.v --
-  // when it is falsy both slots render as "LOCKED -- find a gun to unlock!" with an empty price
-  // array, so no tier of either can be bought. wpn.v is normally only set by walking into the
-  // pickup, and the disconnect wipe clears it, so restore it straight from server-authoritative
-  // checked state. Doing it here rather than only inside filterAlreadyCheckedSpawns() means it
-  // does not depend on having entered a level first -- otherwise opening the shop right after a
-  // reconnect would show both tracks locked despite the check already being done.
-  function restoreGunFlagFromChecks() {
-    if (!window.game || !window.game.ldat) return;
-    if (window.game.ldat.wpn.v) return;
-    if (!ap.isLocationChecked("Find the Gun")) return;
-    window.game.ldat.wpn.v = 0.1;
-    if (typeof window.saveStats === "function") window.saveStats();
-    log("Gun restored from checked locations (Ammo / Gun Power unlocked in shop).");
-  }
-
   ap.onCheckedLocationsUpdated = () => {
-    restoreGunFlagFromChecks();
     if (window.iniLevel) filterAlreadyCheckedSpawns();
     renderStatus();
   };

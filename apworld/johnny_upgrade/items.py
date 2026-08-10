@@ -26,6 +26,13 @@ PROGRESSIVE_AMMO = "Progressive Ammo"
 PROGRESSIVE_GUN_POWER = "Progressive Gun Power"
 PROGRESSIVE_COIN_MULTIPLIER = "Progressive Coin Multiplier"
 
+# The laser gun itself. Walking into the map's gun pickup is still the "Find the Gun" LOCATION,
+# but it no longer arms Johnny -- it only sends the check. Being armed comes from receiving this
+# item, wherever the multiworld happened to put it. The two are fully decoupled: you can be armed
+# without ever visiting the pickup, and you can (and usually will) send the check long before the
+# item shows up.
+LASER_GUN = "Laser Gun"
+
 # Filler: coin bundles grant game.ldat.csh directly when received, scaled by however many
 # Progressive Coin Multiplier tiers have been received (same +50%/tier formula the vanilla
 # game used for coin pickups, just applied to received bundles instead since map coins no
@@ -54,6 +61,10 @@ TRAP_TIME = "Trap Time (-5s)"
 #     floor robot near the boss door cannot be jumped (200px of clearance, 210px needed) or
 #     walked through, so the only routes past it are damage-boosting through its i-frames
 #     (2+ hearts) or shooting it. With damage boosts enabled it gates 34 coins and the boss.
+#   - Laser Gun is "progression", and it is now the item every gun-dependent rule keys off:
+#     without it Johnny cannot fire at all, so it gates every robot check, every gun-based route
+#     alternative, both gun-locked shop tracks and the boss goal. Ammo tiers are worthless until
+#     it arrives (getGun() is what converts them into bullets).
 #   - Progressive Ammo is "progression": shooting that same robot is the alternative route, and
 #     bullets are the ONLY way to kill a robot at all (killRobot is reachable from
 #     bulletHitEnemy and nowhere else), so all 6 enemysanity checks depend on it. Shooting also
@@ -66,9 +77,10 @@ TRAP_TIME = "Trap Time (-5s)"
 #     progression items), so the multiplier -- the item that actually governs cash throughput --
 #     stands in for affordability. See SHOP_MULTIPLIER_GATE in locations.py.
 #
-# Total item count (328) is made to exactly match total location count when coinsanity and
-# enemysanity are both enabled (1 gun + 75 shop + 246 coins + 6 robots = 328); create_items()
-# in __init__.py scales the filler/trap counts down when either sanity option is disabled.
+# The pool is sized against the 328 locations available with coinsanity and enemysanity both
+# enabled (1 gun + 75 shop + 246 coins + 6 robots); create_items() in __init__.py fills whatever
+# the fixed items don't cover from the scalable filler/trap list, so the counts below only need to
+# stay under that total rather than hit it exactly.
 item_table: dict[str, ItemData] = {
     PROGRESSIVE_SPEED: ItemData(0, ItemClassification.progression, 10),
     PROGRESSIVE_JUMP_POWER: ItemData(1, ItemClassification.progression, 10),
@@ -83,11 +95,13 @@ item_table: dict[str, ItemData] = {
     LARGE_COIN_BUNDLE: ItemData(10, ItemClassification.filler, 17),
     BONUS_TIME: ItemData(11, ItemClassification.useful, 8),
     TRAP_TIME: ItemData(12, ItemClassification.trap, 7),
+    LASER_GUN: ItemData(13, ItemClassification.progression, 1),
 }
 
 # Names that are always included at full count regardless of coinsanity/enemysanity (progression
 # plus the fixed "useful" upgrades) vs. the filler/trap pool that gets scaled to fit.
 FIXED_ITEM_NAMES = [
+    LASER_GUN,
     PROGRESSIVE_SPEED,
     PROGRESSIVE_JUMP_POWER,
     DOUBLE_JUMP,

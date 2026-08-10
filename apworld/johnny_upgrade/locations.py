@@ -30,7 +30,8 @@ class JohnnyUpgradeLocation(Location):
 #   - an int: index into generated_requirements.REQUIREMENT_CLASSES, produced by the physics
 #     solver in solver/. Each class is a list of alternatives (OR); each alternative is a dict of
 #     minimum tiers (AND). See solver/README.md for how those are derived.
-#   - the sentinel NEEDS_GUN: accessible once "Find the Gun" is reachable
+#   - the sentinel NEEDS_GUN: accessible once the Laser Gun ITEM has been received (not once the
+#     "Find the Gun" location is reachable -- the pickup only sends a check, see FIND_THE_GUN)
 NEEDS_GUN = "needs_gun"
 Requirement = Optional[Union[int, str]]
 
@@ -40,6 +41,9 @@ class LocationData(NamedTuple):
     requirement: Requirement
 
 
+# Walking into the map's gun pickup. This is a pure location check -- it does NOT arm Johnny;
+# the Laser Gun item does (see items.LASER_GUN). The client keeps the pickup spawning until this
+# location is checked even for a player who already received the item, so the two never interfere.
 FIND_THE_GUN = "Find the Gun"
 
 # Price ladders from the original shop.js -- unchanged from vanilla. These fund the shop-location
@@ -148,7 +152,7 @@ SHOP_TIER_BY_LOCATION: dict[str, tuple[str, int]] = {}
 for _track, _prices in SHOP_PRICES.items():
     for _tier in range(1, len(_prices) + 1):
         # Ammo / Gun Power stay hidden in the shop ("LOCKED -- find a gun to unlock!") until the
-        # gun pickup has been found at least once; every other track is always visible.
+        # Laser Gun item has been received; every other track is always visible.
         _requirement: Requirement = (
             NEEDS_GUN if _track in (PROGRESSIVE_AMMO, PROGRESSIVE_GUN_POWER) else None
         )

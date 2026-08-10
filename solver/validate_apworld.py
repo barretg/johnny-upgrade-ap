@@ -163,6 +163,7 @@ check(not orphan, f"every class keeps a tech-free, damage-free alternative (bad:
 
 print("\nrule translation")
 MAXED = {
+    items.LASER_GUN: 1,
     items.PROGRESSIVE_SPEED: 10,
     items.PROGRESSIVE_JUMP_POWER: 10,
     items.DOUBLE_JUMP: 1,
@@ -196,6 +197,10 @@ def inventories():
     for c in itertools.product([0, 2, 5, 10], repeat=3):
         for energy in (0, 4):
             yield {
+                # The gun is always present here: these inventories exist to compare a rule
+                # against ITSELF under different difficulty settings, so withholding the gun would
+                # only make both sides trivially false and stop the comparison saying anything.
+                items.LASER_GUN: 1,
                 items.PROGRESSIVE_SPEED: c[0],
                 items.PROGRESSIVE_JUMP_POWER: c[1],
                 items.PROGRESSIVE_AMMO: c[2],
@@ -311,7 +316,8 @@ check(
 print("\ngun-locked shop tracks")
 # shop.js only calls addITM for Ammo / Gun Power when game.ldat.wpn.v is set; otherwise both
 # slots render as "LOCKED -- find a gun to unlock!" with an EMPTY price array, so no tier of
-# either track can be bought until the gun has been picked up.
+# either track can be bought. The client now keeps wpn.v in step with the Laser Gun ITEM rather
+# than with the pickup, so these tiers are gated on receiving that item.
 GUN_LOCKED = (items.PROGRESSIVE_AMMO, items.PROGRESSIVE_GUN_POWER)
 for track in GUN_LOCKED:
     tiers = len(locations.SHOP_PRICES[track])
@@ -331,25 +337,72 @@ check(
     "no other shop track is gun-gated",
 )
 
-# And confirm it survives rule construction: gun-gated tiers must be unreachable when the gun
-# location is not, even with every item in the pool.
-reach_no_gun = {**MAXED, "__reach__": {locations.FIND_THE_GUN: False}}
+# And confirm it survives rule construction: gun-gated tiers must be unreachable without the
+# Laser Gun item, even with every other item in the pool.
+no_gun = {**MAXED, items.LASER_GUN: 0}
 built = {}
 for track in GUN_LOCKED:
     for t in range(1, len(locations.SHOP_PRICES[track]) + 1):
         name = locations.shop_location_name(track, t)
-        r = _CanReach(locations.FIND_THE_GUN)
+        r = _Has(items.LASER_GUN)
         gate = locations.SHOP_MULTIPLIER_GATE.get(name, 0)
         if gate:
             r = r & _Has(items.PROGRESSIVE_COIN_MULTIPLIER, count=gate)
         built[name] = r
 check(
-    all(not r.test(reach_no_gun) for r in built.values()),
-    "gun-gated tiers stay unreachable while 'Find the Gun' is not reachable",
+    all(not r.test(no_gun) for r in built.values()),
+    "gun-gated tiers stay unreachable without the Laser Gun item",
 )
 check(
-    all(r.test({**MAXED, "__reach__": {locations.FIND_THE_GUN: True}}) for r in built.values()),
-    "gun-gated tiers become reachable once the gun is",
+    all(r.test(MAXED) for r in built.values()),
+    "gun-gated tiers become reachable once the Laser Gun is received",
+)
+
+# The gun is now an item, so no rule anywhere may still be reaching for the pickup LOCATION --
+# that would silently re-couple the two and reintroduce "you must go get it yourself".
+gun_rules = [rules._class_rule(i, ALL_ON) for i in range(len(CLASSES))]
+gun_rules += [rules._option_rule({"ammo": 1}), _Has(items.LASER_GUN)]
+
+
+def _mentions_reach(rule, name):
+    if isinstance(rule, _CanReach):
+        return rule.name == name
+    if isinstance(rule, (_And, _Or)):
+        return _mentions_reach(rule.a, name) or _mentions_reach(rule.b, name)
+    return False
+
+
+check(
+    not [r for r in gun_rules if r is not None and _mentions_reach(r, locations.FIND_THE_GUN)],
+    "no requirement rule depends on reaching the 'Find the Gun' location",
+)
+
+# Nothing that needs bullets may be satisfiable without the gun -- the guarantee that makes the
+# item, not the pickup, the real key.
+ammo_classes = [i for i, c in enumerate(CLASSES) if all(o.get("ammo", 0) > 0 for o in c)]
+check(bool(ammo_classes), f"{len(ammo_classes)} classes need bullets on every alternative")
+check(
+    all(rules._class_rule(i, ALL_ON).test(no_gun) is False for i in ammo_classes),
+    "bullet-only classes are unsatisfiable without the Laser Gun",
+)
+
+print("\nthe Laser Gun item itself")
+check(
+    items.item_table[items.LASER_GUN].classification is _ItemClassification.progression,
+    "Laser Gun is progression (else logic cannot see it)",
+)
+check(items.item_table[items.LASER_GUN].count == 1, "exactly one Laser Gun in the pool")
+check(items.LASER_GUN in items.FIXED_ITEM_NAMES, "Laser Gun is always placed, never scaled away")
+check(
+    items.LASER_GUN not in items.UPGRADE_TRACK_TIERS,
+    "Laser Gun is an unlock, not a shop-purchasable tier track",
+)
+item_offsets = [d.code_offset for d in items.item_table.values()]
+check(len(set(item_offsets)) == len(item_offsets), "item code offsets are unique")
+fixed_total = sum(items.item_table[n].count for n in items.FIXED_ITEM_NAMES)
+check(
+    fixed_total <= len(locations.location_table),
+    f"{fixed_total} always-placed items fit in {len(locations.location_table)} locations",
 )
 
 print("\nlocation table")
