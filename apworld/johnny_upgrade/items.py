@@ -77,8 +77,8 @@ TRAP_TIME = "Trap Time (-5s)"
 #     progression items), so the multiplier -- the item that actually governs cash throughput --
 #     stands in for affordability. See SHOP_MULTIPLIER_GATE in locations.py.
 #
-# The pool is sized against the 328 locations available with coinsanity and enemysanity both
-# enabled (1 gun + 75 shop + 246 coins + 6 robots); create_items() in __init__.py fills whatever
+# The pool is sized against the 331 locations available with coinsanity and enemysanity both
+# enabled (1 gun + 75 shop + 246 coins + 6 robots + 3 bombs); create_items() in __init__.py fills whatever
 # the fixed items don't cover from the scalable filler/trap list, so the counts below only need to
 # stay under that total rather than hit it exactly.
 item_table: dict[str, ItemData] = {

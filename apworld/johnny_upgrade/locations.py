@@ -30,10 +30,12 @@ class JohnnyUpgradeLocation(Location):
 #   - an int: index into generated_requirements.REQUIREMENT_CLASSES, produced by the physics
 #     solver in solver/. Each class is a list of alternatives (OR); each alternative is a dict of
 #     minimum tiers (AND). See solver/README.md for how those are derived.
+#   - a list of alternatives spelled out inline, in exactly the same shape a class has. Used for
+#     the bombs, whose requirements are hand-derived rather than swept (see BOMB_REQUIREMENTS).
 #   - the sentinel NEEDS_GUN: accessible once the Laser Gun ITEM has been received (not once the
 #     "Find the Gun" location is reachable -- the pickup only sends a check, see FIND_THE_GUN)
 NEEDS_GUN = "needs_gun"
-Requirement = Optional[Union[int, str]]
+Requirement = Optional[Union[int, str, list[dict]]]
 
 
 class LocationData(NamedTuple):
@@ -131,6 +133,57 @@ def robot_location_name(index: int) -> str:
     return f"Robot {index + 1}"
 
 
+def bomb_location_name(index: int) -> str:
+    return f"Bomb {index + 1}"
+
+
+# Bombs: hand-derived requirements, NOT solver output.
+#
+# The sweep never recorded bomb hits -- `shotFrame` in fastsim.js is sized for `enes` only and
+# KILL_RECORDER filters to robots -- so the atlas has no bomb data, and getting some would mean
+# re-sweeping all ~1,936 combos. Instead Barret established these in-game with the debug harness
+# by finding, for each bomb, a coin whose reachability is a good stand-in for "can stand somewhere
+# that can shoot this", then adding the ammo the shot itself costs.
+#
+# Bomb N is indexed by ldat.bombs order, which is what the client tags sprites with. That order is
+# NOT the order you meet them in, so the mapping is spelled out here against map coordinates:
+#   Bomb 1 = bombs[0] at (2695, 440)  -- the one beside the laser
+#   Bomb 2 = bombs[1] at (2120,  70)  -- the one nearest the spawn side
+#   Bomb 3 = bombs[2] at (-110, 1490) -- the one down in the lower-left, which has two approaches
+#
+# Reusing a coin's class means reusing every alternative in it, so bombs inherit the damage-boost
+# and movement-tech tagging of their reference coin and stay filterable by the yaml options like
+# everything else. Requiring ammo makes them gun-gated: a bullet is the only way logic counts.
+#
+# A bomb can also be set off by walking into it -- hitBomb() is called from the contact check as
+# well as from killEnemy() -- but that is NOT a check. The client sends these from killEnemy,
+# whose only call site is the bullet collision loop, so the check requires a bullet and the
+# requirements here describe the game exactly rather than approximating it. Bumping a bomb just
+# destroys it for that round; iniLevel rebuilds it next run, so nothing is lost.
+_BOMB_SOURCES: list[list[tuple[int, int]]] = [
+    [(114, 1)],  # Bomb 1: Coin 114's routes, plus 1 Progressive Ammo
+    [(110, 1)],  # Bomb 2: Coin 110's routes, plus 1 Progressive Ammo
+    [(133, 2), (85, 2)],  # Bomb 3: either approach, each needing 2 Progressive Ammo
+]
+
+
+def _coin_class_with_ammo(coin_number: int, ammo: int) -> list[dict]:
+    """One coin's alternatives, each additionally requiring at least `ammo` tiers.
+
+    `max` rather than plain assignment: a few coin routes already shoot something on the way, and
+    those must keep whatever ammo they needed if it exceeds what the bomb costs.
+    """
+    options = REQUIREMENT_CLASSES[COIN_REQUIREMENT_IDS[coin_number - 1]]
+    return [{**option, "ammo": max(option.get("ammo", 0), ammo)} for option in options]
+
+
+# Concatenation is OR, matching how a solved class lists its alternatives.
+BOMB_REQUIREMENTS: list[list[dict]] = [
+    [option for coin_number, ammo in sources for option in _coin_class_with_ammo(coin_number, ammo)]
+    for sources in _BOMB_SOURCES
+]
+
+
 location_table: dict[str, LocationData] = {}
 _next_offset = 0
 
@@ -168,9 +221,17 @@ ROBOT_LOCATION_NAMES = [robot_location_name(i) for i in range(len(ENEMY_REQUIREM
 for _i, _req_id in enumerate(ENEMY_REQUIREMENT_IDS):
     _add(ROBOT_LOCATION_NAMES[_i], _req_id)
 
+# Appended last on purpose: code offsets are positional, so adding these anywhere earlier would
+# renumber every location after them and invalidate IDs in existing seeds.
+BOMB_LOCATION_NAMES = [bomb_location_name(i) for i in range(len(BOMB_REQUIREMENTS))]
+for _i, _options in enumerate(BOMB_REQUIREMENTS):
+    _add(BOMB_LOCATION_NAMES[_i], _options)
+
 BOSS_ARENA_REQUIREMENT: Requirement = BOSS_ARENA_REQUIREMENT_ID
 
 __all__ = [
+    "BOMB_LOCATION_NAMES",
+    "BOMB_REQUIREMENTS",
     "BOSS_ARENA_REQUIREMENT",
     "COIN_LOCATION_NAMES",
     "FIND_THE_GUN",

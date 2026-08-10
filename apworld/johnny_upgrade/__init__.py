@@ -14,6 +14,7 @@ from .items import (
     item_table,
 )
 from .locations import (
+    BOMB_LOCATION_NAMES,
     COIN_LOCATION_NAMES,
     FIND_THE_GUN,
     ROBOT_LOCATION_NAMES,
@@ -71,8 +72,15 @@ class JohnnyUpgradeWorld(World):
                 {name: self.location_name_to_id[name] for name in COIN_LOCATION_NAMES}, JohnnyUpgradeLocation
             )
         if self.options.enemysanity:
+            # Bombs ride along with enemysanity rather than getting a toggle of their own -- they
+            # are just the other killable thing on the map, and the option was always documented
+            # as covering them eventually.
             level.add_locations(
-                {name: self.location_name_to_id[name] for name in ROBOT_LOCATION_NAMES}, JohnnyUpgradeLocation
+                {
+                    name: self.location_name_to_id[name]
+                    for name in ROBOT_LOCATION_NAMES + BOMB_LOCATION_NAMES
+                },
+                JohnnyUpgradeLocation,
             )
 
     def create_item(self, name: str) -> Item:

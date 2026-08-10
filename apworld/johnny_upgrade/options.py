@@ -34,9 +34,20 @@ class Coinsanity(DefaultOnToggle):
 
 
 class Enemysanity(DefaultOnToggle):
-    """Adds a location check for defeating each killable enemy on the map (6 checks).
+    """Adds a location check for destroying each killable hazard on the map (9 checks).
 
-    Only the 6 "robot" enemies count, not the bombs yet.
+    That is the 6 patrolling "robot" enemies plus the 3 floating bombs. The 2 saws are not
+    included because they cannot be destroyed at all -- killEnemy() only has branches for
+    e.robot, e.bomb and e.boss, so a saw simply absorbs the shot.
+
+    All 9 require shooting. A robot can only ever die to a bullet. A bomb can also be set off by
+    walking into it, but that does not count as the check -- destroying one with your body just
+    clears it for the rest of that round (it is back next run). Both send their check from
+    killEnemy(), which is only reached from the bullet collision loop.
+
+    Robots and bombs are NOT removed from the map once checked, unlike collected coins -- they are
+    hazards as well as checks, and deleting them would make the map progressively easier than the
+    one the logic was derived from.
     """
     display_name = "Enemysanity"
 

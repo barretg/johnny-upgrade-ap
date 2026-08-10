@@ -903,6 +903,11 @@
   function robotLocationName(index) {
     return "Robot " + (index + 1);
   }
+  // Indexed by ldat.bombs order, which is NOT the order you meet them in -- see the mapping
+  // spelled out against map coordinates in the apworld's locations.py.
+  function bombLocationName(index) {
+    return "Bomb " + (index + 1);
+  }
 
   let hooksInstalled = false;
 
@@ -1063,12 +1068,24 @@
       }
     };
 
+    // Both robots and bombs send their check from killEnemy, and that choice is load-bearing for
+    // bombs specifically.
+    //
+    // killEnemy has exactly one call site -- inside the bullet collision loop -- so reaching it
+    // means a bullet connected, nothing else. hitBomb() would have been the tempting hook since
+    // it is "the bomb died", but the game also calls it straight from the contact check
+    // (`if (sprtHitTest(s)) { killSprite(s, 1); if (s.bomb) { hitBomb(s); ... } }`), so hooking
+    // there would send the check for walking into a bomb. Bombs are checks for SHOOTING them.
+    //
+    // Bumping a bomb still destroys it for the rest of that round, as in vanilla, and sends
+    // nothing. Nothing is lost: iniLevel rebuilds the bombs from ldat.bombs every round, so it is
+    // back next run and the check is still there to be earned with the gun.
     const originalKillEnemy = window.killEnemy;
     window.killEnemy = function (e, b) {
       originalKillEnemy.apply(this, arguments);
-      if (e && e.robot && e.__apIndex !== undefined) {
-        ap.checkLocation(robotLocationName(e.__apIndex));
-      }
+      if (!e || e.__apIndex === undefined) return;
+      if (e.robot) ap.checkLocation(robotLocationName(e.__apIndex));
+      if (e.bomb) ap.checkLocation(bombLocationName(e.__apIndex));
     };
 
     // Replaced outright rather than wrapped. Vanilla's body is
@@ -1232,6 +1249,15 @@
         for (const c of toRemove) c.destroy();
       }
     }
+    // Robots are tagged with their ordinal but NOT removed once checked, unlike coins.
+    //
+    // They used to be destroyed at spawn the way checked coins are, and that was wrong twice
+    // over. A robot is a hazard as well as a check, so despawning it permanently deleted an
+    // obstacle from the map -- and the solver never modelled that. It treats every robot as
+    // present at the start of each run and killable only within that run (the S_KILL bitmask is
+    // per-run state), so a player with checked robots was walking a strictly easier map than the
+    // one logic was derived from. Leaving them in place makes the game match the solver, and it
+    // keeps the map's difficulty stable instead of quietly eroding as checks accumulate.
     if (Array.isArray(window.enes)) {
       let robotOrdinal = 0;
       window.enes.forEach((e) => {
@@ -1240,18 +1266,13 @@
           robotOrdinal++;
         }
       });
-      if (ap.slotData && ap.slotData.enemysanity) {
-        const toRemove = window.enes.filter(
-          (e) => e.robot && ap.isLocationChecked(robotLocationName(e.__apIndex))
-        );
-        for (const e of toRemove) {
-          const ci = window.enes.indexOf(e);
-          if (ci !== -1) window.enes.splice(ci, 1);
-          const si = window.spikes ? window.spikes.indexOf(e) : -1;
-          if (si !== -1) window.spikes.splice(si, 1);
-          e.destroy();
-        }
-      }
+    }
+    // Bombs likewise: tagged so killEnemy knows which check to send, never removed. iniLevel
+    // rebuilds this array from ldat.bombs in fixed order every round, so the index is stable.
+    if (Array.isArray(window.bombs)) {
+      window.bombs.forEach((b, i) => {
+        b.__apIndex = i;
+      });
     }
     // The pickup is a location like any other: once checked it stops spawning. It does NOT arm
     // Johnny -- that is the Laser Gun item's job alone (handled in rebuildProgressiveState and the

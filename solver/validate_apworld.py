@@ -405,10 +405,64 @@ check(
     f"{fixed_total} always-placed items fit in {len(locations.location_table)} locations",
 )
 
+print("\nhand-derived bomb requirements")
+# These are NOT solver output -- they reuse a reference coin's class and add the ammo the shot
+# costs (see BOMB_REQUIREMENTS in locations.py). The properties the sweep guarantees for generated
+# classes therefore have to be asserted for these separately.
+BOMBS = locations.BOMB_REQUIREMENTS
+check(len(BOMBS) == 3, f"3 bomb requirement sets (got {len(BOMBS)})")
+check(all(len(b) > 0 for b in BOMBS), "no bomb requirement is empty")
+check(
+    all(set(o) <= ALLOWED for b in BOMBS for o in b),
+    "bomb alternatives use no unknown requirement keys",
+)
+# Gun-gated by construction: every route must fire a bullet, or the check would be obtainable in
+# logic without the gun and the ammo gating would be meaningless.
+check(
+    all(o.get("ammo", 0) > 0 for b in BOMBS for o in b),
+    "every bomb alternative requires ammo (so all are gun-gated)",
+)
+check(
+    max(o.get("ammo", 0) for b in BOMBS for o in b) <= TIERS[items.PROGRESSIVE_AMMO],
+    "bomb ammo requirements fit the item pool",
+)
+# Same guarantee the generated classes carry: nothing may depend exclusively on a difficulty
+# toggle, or turning the toggles off would strand the check.
+check(
+    all([o for o in b if not o.get("tech") and o.get("energy", 1) <= 1] for b in BOMBS),
+    "every bomb keeps a tech-free, damage-free alternative",
+)
+for _i, _opts in enumerate(BOMBS):
+    _rule = rules._options_rule(_opts, ALL_OFF)
+    check(_rule is not None and _rule.test(MAXED), f"Bomb {_i + 1} is satisfiable with all items")
+    check(not _rule.test({**MAXED, items.LASER_GUN: 0}), f"Bomb {_i + 1} needs the Laser Gun")
+    check(not _rule.test({**MAXED, items.PROGRESSIVE_AMMO: 0}), f"Bomb {_i + 1} needs Progressive Ammo")
+    check(not _rule.test(EMPTY), f"Bomb {_i + 1} is not free at game start")
+# Enabling a toggle must not make a bomb harder, exactly as for the swept classes.
+for _label, _allow in SETTING_COMBOS[1:]:
+    _bad = []
+    for _i, _opts in enumerate(BOMBS):
+        _s, _l = rules._options_rule(_opts, ALL_OFF), rules._options_rule(_opts, _allow)
+        for _inv in inventories():
+            if truth(_s, _inv) and not truth(_l, _inv):
+                _bad.append(_i)
+                break
+    check(not _bad, f"enabling '{_label}' never makes a bomb harder (bad: {_bad[:3]})")
+
 print("\nlocation table")
 check(len(locations.COIN_LOCATION_NAMES) == 246, "246 coin locations")
 check(len(locations.ROBOT_LOCATION_NAMES) == 6, "6 robot locations")
-check(len(locations.location_table) == 1 + 75 + 246 + 6, f"328 locations total (got {len(locations.location_table)})")
+check(len(locations.BOMB_LOCATION_NAMES) == 3, "3 bomb locations")
+check(
+    len(locations.location_table) == 1 + 75 + 246 + 6 + 3,
+    f"331 locations total (got {len(locations.location_table)})",
+)
+# Bombs were appended last so existing ids keep their offsets.
+check(
+    min(locations.location_table[n].code_offset for n in locations.BOMB_LOCATION_NAMES)
+    > max(locations.location_table[n].code_offset for n in locations.ROBOT_LOCATION_NAMES),
+    "bomb offsets come after every pre-existing location",
+)
 offsets = [d.code_offset for d in locations.location_table.values()]
 check(len(set(offsets)) == len(offsets), "location code offsets are unique")
 

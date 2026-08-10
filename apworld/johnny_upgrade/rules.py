@@ -92,13 +92,12 @@ def _allowed(option: dict, allow: dict) -> bool:
     return True
 
 
-def _class_rule(class_id: int, allow: dict) -> Optional[Rule]:
-    """Translate one requirement class (a list of alternatives, ORed) into a Rule.
+def _options_rule(options: list[dict], allow: dict) -> Optional[Rule]:
+    """Translate a list of alternatives (ORed) into a Rule.
 
-    Returns None when the class imposes no requirement at all, i.e. some alternative is
-    satisfiable with nothing.
+    Returns None when they impose no requirement at all, i.e. some alternative is satisfiable
+    with nothing.
     """
-    options = REQUIREMENT_CLASSES[class_id]
     # The solver guarantees every location keeps at least one alternative with no damage boost
     # and no movement tech, so no combination of these settings can empty a class. Fall back to
     # the unfiltered list rather than produce an unfillable location if that ever regresses.
@@ -113,6 +112,11 @@ def _class_rule(class_id: int, allow: dict) -> Optional[Rule]:
             return None  # this alternative is free, so the whole OR is free
         rule = option_rule if rule is None else (rule | option_rule)
     return rule
+
+
+def _class_rule(class_id: int, allow: dict) -> Optional[Rule]:
+    """Translate one solver-produced requirement class into a Rule."""
+    return _options_rule(REQUIREMENT_CLASSES[class_id], allow)
 
 
 def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
@@ -147,6 +151,10 @@ def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
             rule = None
         elif requirement == NEEDS_GUN:
             rule = Has(LASER_GUN)
+        elif isinstance(requirement, list):
+            # Spelled-out alternatives rather than a solver class id (the bombs). Not cached: the
+            # cache is keyed by class id, and there are only a handful of these.
+            rule = _options_rule(requirement, allow)
         else:
             rule = rule_for(requirement)
 
