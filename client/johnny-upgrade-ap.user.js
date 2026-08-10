@@ -1354,10 +1354,37 @@
   // tearing down the first, which is exactly the kind of thing ArchipelagoClient.connect() now
   // guards against too (it calls disconnect() on any existing socket before opening a new one).
   // ---------------------------------------------------------------------------------------
+  const PANEL_INPUT_IDS = ["ap-ju-server", "ap-ju-slot", "ap-ju-password"];
+
+  // Keep the game's keyboard handling away from our text fields.
+  //
+  // Phaser swallows the keys the game uses: level.js calls
+  // `game.input.keyboard.addKey(Phaser.Keyboard.SPACEBAR)`, and Keyboard.addKey ALWAYS routes
+  // through addKeyCapture (there is no opt-out in the signature), after which processKeyDown runs
+  // `this._capture[keyCode] && event.preventDefault()`. Phaser's listeners are on `window` in the
+  // BUBBLE phase, so a keystroke typed into one of our inputs reaches them straight after the
+  // input and gets its default action cancelled -- meaning the character is never inserted.
+  //
+  // Spaces are perfectly legal in Archipelago slot names, so this made a whole class of slot name
+  // untypable. Stopping propagation at the input is what fixes it: because Phaser listens on the
+  // bubble phase, a listener on the field itself runs first and can keep the event from ever
+  // reaching the game. This also stops the arrow keys from driving Johnny (and having their caret
+  // movement cancelled) while the caret is in a field.
+  //
+  // Our own H/G shortcuts are unaffected: they are capture-phase listeners on window, so they
+  // have already run and returned early on their existing "is the target an input?" guard.
+  for (const id of PANEL_INPUT_IDS) {
+    const field = document.getElementById(id);
+    if (!field) continue;
+    for (const type of ["keydown", "keypress", "keyup"]) {
+      field.addEventListener(type, (e) => e.stopPropagation());
+    }
+  }
+
   function setConnectButtonState(connected) {
     const btn = document.getElementById("ap-ju-connect");
     btn.textContent = connected ? "Disconnect" : "Connect";
-    for (const id of ["ap-ju-server", "ap-ju-slot", "ap-ju-password"]) {
+    for (const id of PANEL_INPUT_IDS) {
       document.getElementById(id).disabled = connected;
     }
   }
