@@ -50,11 +50,6 @@
  * KNOWN GAPS / things that need verification against real play before trusting this fully:
  * - The exact boss combat requirement (how much Ammo/Gun Power is really needed) was not
  *   reverse engineered in depth -- see rules.py's placeholder goal rule.
- * - This file has not been run against the live game. Function/field names were all confirmed
- *   by reading js/*.js directly (see scratch-work/johnny-upgrade-sdk/), but runtime behavior
- *   (timing of when `window.game`/functions become available, whether Phaser wraps these in a
- *   closure instead of leaving them as plain globals, etc.) should be spot-checked in a real
- *   browser session.
  */
 
 (function () {
