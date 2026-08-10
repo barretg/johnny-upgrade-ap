@@ -67,6 +67,11 @@
   const GAME_NAME = "Johnny Upgrade";
   const AP_VERSION = { major: 0, minor: 6, build: 0, class: "Version" };
 
+  // How long a cash sync waits to coalesce a burst of shop purchases into a single delta.
+  // Comfortably longer than rapid clicking, short enough that leaving the shop or closing the tab
+  // right after buying still catches it.
+  const CASH_SYNC_DEBOUNCE_MS = 500;
+
   const UPGRADE_FIELD_BY_ITEM = {
     "Progressive Speed": "spd",
     "Progressive Jump Power": "jmp",
@@ -175,6 +180,10 @@
       this.locationNameToId = {};
       this.locationIdToName = {};
       this.itemIdToNameByGame = {}; // gameName -> {itemId -> itemName}
+      // Same for locations, across every game rather than just ours. Server messages talk about
+      // other players' locations ("X found Y in Z"), so resolving those names needs more than our
+      // own table.
+      this.locationIdToNameByGame = {};
       this.checkedLocationIds = new Set();
       this.slotData = null;
       this.team = null;
@@ -296,9 +305,14 @@
       }
       this.socket = null;
       this.connected = false;
+      if (this._cashSyncTimer) {
+        clearTimeout(this._cashSyncTimer);
+        this._cashSyncTimer = null;
+      }
       this.locationNameToId = {};
       this.locationIdToName = {};
       this.itemIdToNameByGame = {};
+      this.locationIdToNameByGame = {};
       this.checkedLocationIds = new Set();
       this.slotData = null;
       this.team = null;
@@ -328,20 +342,59 @@
       return "johnny_upgrade_areas_" + this.team + "_" + this.slot;
     }
 
+    // Push local cash to the server and adopt whatever total comes back.
+    //
+    // Cash is deliberately NOT part of the periodic sync, and is pushed as a DELTA rather than
+    // written outright. Both of those are the fix for a real coin-eating race: the old code polled
+    // every 2s with a "replace", and had SetNotify on its own key, so any cash the player earned
+    // in the window between the server's value being read and the next poll could be overwritten
+    // by an inbound SetReply carrying the older total. Coins would visibly vanish.
+    //
+    // "add" makes the server the ledger and this client a reporter of change, so a write can never
+    // destroy value it did not know about. The baseline is the local total as of the previous
+    // sync, so the delta naturally covers a whole round's earnings (coins, passive income, coin
+    // bundle items) as well as shop spending, without having to instrument each of those sites.
+    syncCash() {
+      // A pending debounced sync is now redundant: the delta is computed from the live total, so
+      // this call already covers whatever that one was scheduled for.
+      if (this._cashSyncTimer) {
+        clearTimeout(this._cashSyncTimer);
+        this._cashSyncTimer = null;
+      }
+      if (!this.connected) return;
+      const cash = this.getLocalCash();
+      if (cash === null || this.lastSyncedCash === null) return;
+      const delta = cash - this.lastSyncedCash;
+      // want_reply gives back the authoritative post-add total, which is what the SetReply handler
+      // then adopts locally -- that is the "pull" half of the sync.
+      this._send({
+        cmd: "Set",
+        key: this._cashKey(),
+        default: 0,
+        want_reply: true,
+        operations: [{ operation: "add", value: delta }],
+      });
+    }
+
+    // Schedule a sync shortly from now, coalescing a burst of purchases into one packet.
+    //
+    // Deliberately NOT a resetting debounce: a call while one is already pending is dropped rather
+    // than pushing the deadline back, so the sync still lands within CASH_SYNC_DEBOUNCE_MS of the
+    // FIRST purchase in a burst. A resetting debounce would let someone buying steadily defer the
+    // write indefinitely, which is the opposite of what this is for. Dropping the extra calls
+    // loses nothing because syncCash reads the live total when it fires, so one packet carries the
+    // whole burst's delta.
+    syncCashSoon() {
+      if (this._cashSyncTimer) return;
+      this._cashSyncTimer = setTimeout(() => {
+        this._cashSyncTimer = null;
+        this.syncCash();
+      }, CASH_SYNC_DEBOUNCE_MS);
+    }
+
     _startStateSync() {
       if (this.stateSyncTimer) return;
       this.stateSyncTimer = setInterval(() => {
-        const cash = this.getLocalCash();
-        if (cash !== null && cash !== this.lastSyncedCash) {
-          this.lastSyncedCash = cash;
-          this._send({
-            cmd: "Set",
-            key: this._cashKey(),
-            default: 0,
-            want_reply: false,
-            operations: [{ operation: "replace", value: cash }],
-          });
-        }
         const areas = this.getLocalAreas();
         if (areas !== null && areas !== this.lastSyncedAreas) {
           this.lastSyncedAreas = areas;
@@ -383,6 +436,9 @@
             this.itemIdToNameByGame[gameName] = Object.fromEntries(
               Object.entries(gameData.item_name_to_id).map(([name, id]) => [id, name])
             );
+            this.locationIdToNameByGame[gameName] = Object.fromEntries(
+              Object.entries(gameData.location_name_to_id).map(([name, id]) => [id, name])
+            );
             if (gameName === GAME_NAME) {
               this.locationNameToId = gameData.location_name_to_id;
               this.locationIdToName = Object.fromEntries(
@@ -414,18 +470,28 @@
           // since it otherwise only lives in the page's in-memory game.ldat.csh.v), and keep
           // pushing local changes to it periodically so it stays backed up while playing.
           this._send({ cmd: "Get", keys: [this._cashKey(), this._areasKey()] });
-          this._send({ cmd: "SetNotify", keys: [this._cashKey(), this._areasKey()] });
+          // SetNotify covers areas ONLY. Subscribing to the cash key meant every change echoed
+          // back as a SetReply that was applied straight to game.ldat.csh.v, which is how cash
+          // earned since the value was read got clobbered. Cash now changes locally only, and
+          // reconciles with the server at the shop (see syncCash).
+          this._send({ cmd: "SetNotify", keys: [this._areasKey()] });
           // The periodic push deliberately does NOT start here. On a fresh connection the local
           // save has just been wiped (cash back to 1, no areas), so a tick landing before the
-          // Get response would "replace" the server's stored cash with 1 and destroy it. Start
-          // syncing only once the server's values are in hand -- see the Retrieved case.
+          // Get response would push nonsense. Start syncing only once the server's values are in
+          // hand -- see the Retrieved case.
           break;
         case "Retrieved":
           if (packet.keys) {
             const storedCash = packet.keys[this._cashKey()];
-            if (storedCash !== null && storedCash !== undefined) {
+            if (typeof storedCash === "number") {
               this.lastSyncedCash = storedCash;
               this.onCashRestored(storedCash);
+            } else {
+              // Key has never been written (a brand-new slot): Get answers with null. Take 0 as
+              // the baseline rather than leaving it unset, or syncCash would bail out forever and
+              // this slot's cash would never reach the server at all. Local cash is left alone --
+              // the first sync reports it as the delta from zero.
+              this.lastSyncedCash = 0;
             }
             const storedAreas = packet.keys[this._areasKey()];
             if (storedAreas !== null && storedAreas !== undefined) {
@@ -437,6 +503,9 @@
           break;
         case "SetReply":
           if (packet.key === this._cashKey()) {
+            // Only ever arrives in response to our own syncCash (the cash key is not in
+            // SetNotify), so adopting it wholesale is safe: it is the post-add total that already
+            // includes the delta we just reported.
             this.lastSyncedCash = packet.value;
             this.onCashRestored(packet.value);
           } else if (packet.key === this._areasKey()) {
@@ -461,11 +530,64 @@
           }
           break;
         case "PrintJSON":
-          log(packet.data.map((part) => part.text || "").join(""));
+          log(this._formatJSONMessage(packet.data));
           break;
         default:
           break;
       }
+    }
+
+    // Render a PrintJSON message for the log panel.
+    //
+    // The parts of a server message are NOT all plain text. For the interesting ones -- the item,
+    // the location, the player -- `text` holds a numeric ID and `type` says what kind of ID it is,
+    // with the name left to the client to look up from the data package. Simply concatenating
+    // `text` (which is what this used to do) is why messages read like
+    // "9990013 sent 9990001 to 1" instead of naming anything.
+    //
+    // IDs are only unique within a game, so item and location parts also carry `player`: the slot
+    // whose game the ID belongs to. Resolving therefore goes ID -> that player's game -> that
+    // game's table, which is why the data package is requested for every game rather than ours.
+    _playerName(slot) {
+      const player = this.players.find((p) => p.slot === slot);
+      return (player && (player.alias || player.name)) || "Player " + slot;
+    }
+
+    _gameOfSlot(slot) {
+      return this.slotInfo[slot] ? this.slotInfo[slot].game : null;
+    }
+
+    _itemNameFor(id, slot) {
+      const game = this._gameOfSlot(slot);
+      const names = game ? this.itemIdToNameByGame[game] : null;
+      return (names && names[id]) || "Item #" + id;
+    }
+
+    _locationNameFor(id, slot) {
+      const game = this._gameOfSlot(slot);
+      const names = game ? this.locationIdToNameByGame[game] : null;
+      return (names && names[id]) || "Location #" + id;
+    }
+
+    _formatJSONMessage(parts) {
+      if (!Array.isArray(parts)) return "";
+      return parts
+        .map((part) => {
+          const text = part.text === undefined || part.text === null ? "" : String(part.text);
+          switch (part.type) {
+            case "player_id":
+              return this._playerName(parseInt(text, 10));
+            case "item_id":
+              return this._itemNameFor(parseInt(text, 10), part.player);
+            case "location_id":
+              return this._locationNameFor(parseInt(text, 10), part.player);
+            // player_name / item_name / location_name / entrance_name / color / plain text all
+            // already carry human-readable content in `text`.
+            default:
+              return text;
+          }
+        })
+        .join("");
     }
 
     // Archipelago replays the FULL item history from index 0 on every fresh connection (not
@@ -659,6 +781,27 @@
     renderStatus();
   }
 
+  // The shop's own cash readout is a Phaser.Text built in ShopState.create and held in a local
+  // var, so there is no handle on it -- but it is added to shopObj.dsp at a fixed position, which
+  // is enough to find it again. Needed because the shop-entry sync resolves asynchronously, after
+  // create() has already drawn the number.
+  const SHOP_CASH_TEXT_POS = { x: 238, y: 21 };
+
+  function refreshShopCashDisplay() {
+    if (!window.shopObj || !window.shopObj.dsp || !window.game || !window.game.ldat) return;
+    for (const child of window.shopObj.dsp.children || []) {
+      if (
+        child &&
+        typeof child.setText === "function" &&
+        child.x === SHOP_CASH_TEXT_POS.x &&
+        child.y === SHOP_CASH_TEXT_POS.y
+      ) {
+        child.setText("$" + window.game.ldat.csh.v);
+        return;
+      }
+    }
+  }
+
   // dsp.cns (the in-level cash HUD text) only exists while a round is actually active -- it's
   // created fresh each time a level starts and doesn't exist in the shop/title screens, so this
   // must stay guarded rather than called unconditionally.
@@ -805,6 +948,33 @@
       filterAlreadyCheckedSpawns();
     };
 
+    // Cash reconciles with the server at the shop and nowhere else: on entering, on each purchase
+    // (debounced), and on leaving. What all three have in common is that none of them happen
+    // during a round -- and a round is exactly the window in which cash is earned while nothing
+    // needs the server's opinion of it. Keeping the server out of it until the player comes back
+    // to spend is what removes the race, because there is no longer any moment where an inbound
+    // total can land on top of coins just picked up. See ArchipelagoClient.syncCash for the delta
+    // scheme that makes this safe.
+    //
+    // Runs AFTER the original create, so the reported total is the one the shop is actually
+    // showing: ShopState.create opens by flooring csh.v, and syncing first would push the
+    // fractional part and then immediately drift by the rounding.
+    const originalShopCreate = window.ShopState.create;
+    window.ShopState.create = function () {
+      originalShopCreate.apply(this, arguments);
+      ap.syncCash();
+    };
+
+    // Flush on the way out too, so a session that ends in the shop (tab closed, disconnect) does
+    // not leave the last visit's spending unreported -- otherwise the server still holds the
+    // pre-purchase total and the player gets their cash back while keeping the checks they bought.
+    // Immediate rather than debounced: this is the last chance to report.
+    const originalShopLeave = window.shopLeave;
+    window.shopLeave = function () {
+      originalShopLeave.apply(this, arguments);
+      ap.syncCash();
+    };
+
     const originalClockCode = window.clockCode;
     window.clockCode = function () {
       originalClockCode.apply(this, arguments);
@@ -922,7 +1092,17 @@
     window.shopBtnPress = function (e) {
       const track = shopTrackNameFromItem(e);
       const lvlBefore = e && e.lvl ? e.lvl.v : null;
+      const cashBefore = window.game && window.game.ldat ? window.game.ldat.csh.v : null;
       originalShopBtnPress.apply(this, arguments);
+
+      // Report spending as it happens rather than only at the shop door. Gated on the cash
+      // actually moving, since this same handler fires for clicks that buy nothing -- a tier the
+      // player cannot afford, or Double Jump, which is priced in EXP and never touches csh.v.
+      const cashAfter = window.game && window.game.ldat ? window.game.ldat.csh.v : null;
+      if (cashBefore !== null && cashAfter !== null && cashAfter !== cashBefore) {
+        ap.syncCashSoon();
+      }
+
       if (track && lvlBefore !== null) {
         // Vanilla shopBtnPress advances e.lvl.v itself -- per the agreed design, only received
         // Progressive items should move this (see rebuildProgressiveState), so revert it and
@@ -1137,7 +1317,9 @@
       window.getGun &&
       window.bossHit &&
       window.addITM &&
-      window.clockCode
+      window.clockCode &&
+      window.ShopState && // hooked for the shop-entry cash sync
+      window.shopLeave // hooked to flush spending on the way out
     ) {
       installHooks();
     } else {
@@ -1191,9 +1373,15 @@
   };
   ap.onCashRestored = (amount) => {
     if (window.game && window.game.ldat) {
+      // Normally a no-op: this now fires on the reply to our own shop-entry sync, and the total
+      // coming back already equals what we reported. Only log when it genuinely moves the number
+      // -- i.e. on the initial restore, or if another session had touched the slot -- so routine
+      // shop visits don't spam the panel.
+      const changed = window.game.ldat.csh.v !== amount;
       window.game.ldat.csh.v = amount;
       refreshCoinDisplay();
-      log("Restored cash from server: " + amount);
+      refreshShopCashDisplay();
+      if (changed) log("Cash synced with server: " + amount);
     }
   };
   ap.onConnected = () => {
