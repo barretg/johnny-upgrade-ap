@@ -123,13 +123,29 @@
     true
   );
 
+  // "G" should collapse the panel header. Bound on window in the CAPTURE phase so it still works while the game canvas has focus,
+  // and left to propagate afterwards since the game does nothing with G.
+  document.getElementById("ap-ju-header").addEventListener("keydown", () => {
+    if (e.key !== "h" && e.key !== "H") return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    // Never swallow the letter while a field has focus, or the server address becomes untypable.
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    
+    collapseHeader();
+  });
+
   document.getElementById("ap-ju-header").addEventListener("click", () => {
+    collapseHeader();
+  });
+
+  function collapseHeader() {
     const body = document.getElementById("ap-ju-body");
     const toggle = document.getElementById("ap-ju-toggle");
     const collapsed = body.style.display === "none";
     body.style.display = collapsed ? "" : "none";
     toggle.innerHTML = collapsed ? "&#9660;" : "&#9654;";
-  });
+  }
 
   function log(message) {
     const el = document.getElementById("ap-ju-log");
@@ -731,12 +747,15 @@
     //     without correction the shop would show the same price/tier forever. We temporarily
     //     feed it the REAL next-unchecked-tier index (derived from server-authoritative checked
     //     state, same pattern as everywhere else) just for this call, then restore afterward.
-    //  2. The panel's upgrade name ("MULTIPLIER", "GUN POWER", ...) is baked into the
-    //     `sheetShopPanelDesktop/Mobile` sprite-sheet frame image, not settable text -- so we
-    //     can't replace it directly. Instead we add a small text overlay on top of the panel
-    //     showing the scouted item this location actually sends. Exact positioning is a first
-    //     guess (txt1/txt2 in vanilla sit right-aligned at x=622; this uses the left side) and
-    //     will likely need visual tweaking once seen in the real browser layout.
+    //  2. The panel's upgrade name+description ("SPEED / increases your running speed!", ...)
+    //     is baked into the `sheetShopPanelDesktop/Mobile` sprite-sheet frame image, not settable
+    //     text -- so we can't replace it directly. Instead we paint a black rect over that part
+    //     of the panel and put the scouted item name on top of it. Panel frames are 620x55,
+    //     placed at bg.x=90; the icon occupies local x=[0,48]. Vanilla's dynamic txt1/txt2
+    //     (level/price) are anchored right at local x=622 but the text itself runs LEFTWARD from
+    //     there (anchor.setTo(1,0)) and can be ~150-180px wide ("level: 10/24 "), so the cover
+    //     must stop well short of x=622 -- it only spans local x=[48,440], the name+description
+    //     area, leaving the level/price column untouched.
     const originalAddITM = window.addITM;
     window.addITM = function (nam, dsc, levl, priceArr) {
       const track = SHOP_DISPLAY_TO_TRACK_NAME[nam];
@@ -755,13 +774,19 @@
 
       if (window.shopObj && panelY !== null && window.game) {
         const label = ap.scoutedItemDisplay["Shop: " + track + " Tier " + (nextTier || maxTier)] || "...";
-        const overlay = window.game.add.text(10, panelY + 8, label, {
+        const panelX = 90;
+        const coverX = panelX + 48;
+        const coverW = 440 - 48;
+        const cover = window.game.add.graphics(coverX, panelY);
+        cover.beginFill(0x000000, 0.85);
+        cover.drawRect(0, 0, coverW, 55);
+        cover.endFill();
+        window.shopObj.dsp.add(cover);
+        const overlay = window.game.add.text(coverX + 6, panelY + 8, label, {
           font: "14px monospace",
           fill: "#FFEE88",
-          backgroundColor: "rgba(0,0,0,0.85)",
           wordWrap: true,
-          wordWrapWidth: 300,
-          padding: { x: 4, y: 2 },
+          wordWrapWidth: coverW - 12,
         });
         window.shopObj.dsp.add(overlay);
       }
