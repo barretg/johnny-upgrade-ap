@@ -125,7 +125,7 @@
 
   // "G" should collapse the panel header. Bound on window in the CAPTURE phase so it still works while the game canvas has focus,
   // and left to propagate afterwards since the game does nothing with G.
-  document.getElementById("ap-ju-header").addEventListener("keydown", () => {
+  document.getElementById("ap-ju-header").addEventListener("keydown", (e) => {
     if (e.key !== "h" && e.key !== "H") return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     // Never swallow the letter while a field has focus, or the server address becomes untypable.
