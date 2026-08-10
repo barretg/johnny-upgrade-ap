@@ -123,17 +123,21 @@
     true
   );
 
-  // "G" should collapse the panel header. Bound on window in the CAPTURE phase so it still works while the game canvas has focus,
-  // and left to propagate afterwards since the game does nothing with G.
-  document.getElementById("ap-ju-header").addEventListener("keydown", (e) => {
-    if (e.key !== "h" && e.key !== "H") return;
-    if (e.ctrlKey || e.altKey || e.metaKey) return;
-    // Never swallow the letter while a field has focus, or the server address becomes untypable.
-    const t = e.target;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-    
-    collapseHeader();
-  });
+  // "G" collapses the panel header. Bound on window in the CAPTURE phase so it still works while
+  // the game canvas has focus, and left to propagate afterwards since the game does nothing with
+  // G. (A listener on the header div itself never fires -- plain divs aren't keyboard-focusable.)
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "g" && e.key !== "G") return;
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      // Never swallow the letter while a field has focus, or the server address becomes untypable.
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      collapseHeader();
+    },
+    true
+  );
 
   document.getElementById("ap-ju-header").addEventListener("click", () => {
     collapseHeader();
