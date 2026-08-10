@@ -92,7 +92,7 @@
     "box-shadow:0 2px 8px rgba(0,0,0,0.5);";
   panel.innerHTML =
     '<div id="ap-ju-header" style="font-weight:bold;margin-bottom:4px;cursor:pointer;display:flex;justify-content:space-between;">' +
-    '<span>Archipelago <span style="font-weight:normal;color:#889;font-size:10px;">(H to hide)</span></span>' +
+    '<span>Archipelago <span style="font-weight:normal;color:#889;font-size:10px;">(G to collapse, H to hide)</span></span>' +
     "<span id=\"ap-ju-toggle\">&#9660;</span></div>" +
     '<div id="ap-ju-body">' +
     '<input id="ap-ju-server" placeholder="archipelago.gg:38281" style="width:100%;margin-bottom:2px;box-sizing:border-box;">' +
