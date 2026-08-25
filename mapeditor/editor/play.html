@@ -1,0 +1,331 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!--
+  The SDK asks for its scripts and assets with RELATIVE paths ("js/phaser.js",
+  "assets/pics/..."). This page is served at /play (no trailing slash), so those
+  would resolve against / and 404. Pinning the base to /play/ makes them resolve
+  where the server actually mounts the SDK, whatever the URL's trailing slash or
+  query string looks like. Every other URL on this page is absolute, so nothing
+  else is affected.
+-->
+<base href="/play/">
+<title>Quick Run</title>
+<style>
+  :root { --panel:#1c1f28; --line:#2c3040; --text:#dde1ea; --dim:#8b93a7; --accent:#6ea8fe; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; background:#0d0f14; color:var(--text);
+              font:13px/1.45 ui-sans-serif,system-ui,sans-serif; overflow:hidden; }
+  body { display:grid; grid-template-columns:1fr 232px; }
+  #game { display:grid; place-items:center; min-width:0; }
+  #game canvas { max-width:100%; max-height:100vh; }
+  aside { background:var(--panel); border-left:1px solid var(--line); overflow-y:auto; padding:10px 12px; }
+  h2 { font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:var(--dim);
+       margin:12px 0 7px; font-weight:600; }
+  h2:first-child { margin-top:0; }
+  .up { display:grid; grid-template-columns:1fr 46px; gap:6px; align-items:center;
+        margin-bottom:6px; font-size:11px; }
+  .up input[type=range] { width:100%; }
+  .up .v { text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; }
+  button { width:100%; background:#262b38; border:1px solid var(--line); color:var(--text);
+           border-radius:6px; padding:6px 9px; font:inherit; font-size:11px; cursor:pointer;
+           margin-bottom:6px; }
+  button:hover { background:#303748; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#0d1017; font-weight:600; }
+  .note { color:var(--dim); font-size:10px; line-height:1.4; margin:8px 0 0; }
+  #status { font-size:11px; color:var(--dim); min-height:16px; }
+  .chk { display:flex; gap:6px; align-items:center; font-size:11px;
+         color:var(--dim); margin:2px 0 8px; cursor:pointer; }
+  .chk input { margin:0; }
+</style>
+</head>
+<body>
+
+<div id="game"></div>
+
+<aside>
+  <h2>Map</h2>
+  <div id="status">loading…</div>
+  <button id="restart" class="primary">restart level</button>
+  <button id="back">back to editor</button>
+  <label class="chk"><input type="checkbox" id="quickRestart" checked>
+    <span>quick restart (skip shop)</span></label>
+
+  <h2>Upgrades</h2>
+  <div id="ups"></div>
+  <button id="maxAll">max everything</button>
+  <button id="zeroAll">reset to zero</button>
+
+  <p class="note">Upgrades apply on the next level start — hit restart after changing them.</p>
+</aside>
+
+<script src="/mapkit/mapformat.js"></script>
+<script src="/mapkit/crushers.js"></script>
+<script src="/mapkit/doors.js"></script>
+<script>
+'use strict';
+/*
+ * Quick run: boot the real game against a map from the editor.
+ *
+ * This is the first point where a custom map meets the actual engine, so it is
+ * deliberately the real SDK rather than a reimplementation -- if the map data is
+ * wrong, it should be wrong here in the same way it would be in the shipped game.
+ *
+ * Three things have to be worked around to run the SDK off localhost:
+ *
+ *  1. loader.js destroys the game unless the page's hostname ends in one of
+ *     coolmathgames.com / coolmath-games.com / cmatgame.local. `arr` is a plain
+ *     global, so our host gets appended to it before the check runs.
+ *  2. The splash and title screens are skipped, since the point is to be in the
+ *     level immediately.
+ *  3. iniLevel() paints the vanilla mural as six fixed background images. Those
+ *     are hidden and the map's own art layer drawn instead, over flat black
+ *     platform bodies.
+ */
+
+const params = new URLSearchParams(location.search);
+const MAP_ID = params.get('map');
+
+// game.ldat stores tiers as tenths: v = tierCount * 0.1, for every track.
+const UPGRADES = [
+  { key:'spd',    label:'Speed',        max:10 },
+  { key:'jmp',    label:'Jump power',   max:10 },
+  { key:'jmp2',   label:'Double jump',  max:1  },
+  { key:'tim',    label:'Time limit',   max:24 },
+  { key:'nrg',    label:'Energy',       max:5  },
+  { key:'wpn',    label:'Has gun',      max:1  },
+  { key:'ammo',   label:'Ammo',         max:10 },
+  { key:'gunpow', label:'Gun power',    max:10 },
+  { key:'multi',  label:'Coin multi',   max:10 },
+];
+
+let mapData = null;
+let tileNames = [];
+const setStatus = (s) => { document.getElementById('status').textContent = s; };
+
+// ------------------------------------------------------------------ boot
+async function boot() {
+  if (!MAP_ID) { setStatus('no map specified'); return; }
+  mapData = await (await fetch('/api/map/' + MAP_ID)).json();
+  tileNames = [...new Set((mapData.art || []).map((a) => a.tile).filter(Boolean))];
+  setStatus((mapData.meta && mapData.meta.name) || MAP_ID);
+
+  buildUpgradePanel();
+  await loadSdk();
+  patchAndStart();
+}
+
+function loadSdk() {
+  // the SDK's own load order, minus the coolmath ad script and jquery
+  const files = ['js/phaser.js', 'js/loader.js', 'js/title.js', 'js/level.js',
+                 'js/shop.js', 'js/boss.js', 'js/gameOver.js', 'js/main.js'];
+  return files.reduce((chain, f) => chain.then(() => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = f; s.onload = res; s.onerror = () => rej(new Error('failed to load ' + f));
+    document.head.appendChild(s);
+  })), Promise.resolve());
+}
+
+/*
+ * Stubs for the Coolmath host page.
+ *
+ * The SDK expects two functions that live in cmg-ads.js on coolmathgames.com,
+ * which we deliberately do not load. Without them the game throws every frame
+ * once a level ends.
+ *
+ *   cmgGameEvent  telemetry, called from title, level, shop and gameOver
+ *   cmgAdBreak    the ad break at level end. addBreak() hides the sprite layer,
+ *                 mutes, calls it, and waits for an "adBreakComplete" event to
+ *                 unhide and continue -- so a stub that never fires that event
+ *                 leaves the game frozen on a blank screen.
+ *
+ * The caller sets levl = -1 first, which sends us to the shop. With quick restart
+ * on we override that and go straight back into the level, since the debug panel
+ * already does what the shop is for. Turn it off to exercise the real flow.
+ */
+function stubHostPage() {
+  window.cmgGameEvent = function () {};
+  window.cmgAdBreak = function () {
+    const quick = document.getElementById('quickRestart');
+    if (!quick || quick.checked) { try { levl = 1; } catch (e) {} }
+    document.dispatchEvent(new Event('adBreakComplete'));
+  };
+}
+
+function patchAndStart() {
+  stubHostPage();
+
+  // 1. defeat the host check by whitelisting wherever we are actually served from
+  try { arr.push(location.hostname.split('.').splice(-2).join('.')); } catch (e) {}
+
+  // 2. the map itself. Saved files are already in the game's own shape.
+  maps[1] = mapData;
+
+  // 3. preload the map's textures alongside the game's own assets
+  const origPreload = LoaderState.preload;
+  LoaderState.preload = function () {
+    origPreload.call(this);
+    for (const name of tileNames) game.load.image('tile_' + name, '/tile/' + encodeURIComponent(name) + '.png');
+  };
+
+  // 4. skip the splash and the title screen
+  const origLoaderCreate = LoaderState.create;
+  LoaderState.create = function () {
+    origLoaderCreate.call(this);
+    if (game.btnPlay) game.btnPlay.destroy();
+    applyUpgrades();
+    levl = 1;
+    newState();
+  };
+
+  const origMainCreate = MainState.create;
+  MainState.create = function () { origMainCreate.call(this); game.splashCT = 1; };
+
+  patchLevelArt();
+  // Replace the stock single-crusher routine with the configurable one. Must
+  // come after patchLevelArt, since both wrap iniLevel and the innermost wrap
+  // has to be the original.
+  Crushers.install(window);
+  Doors.install(window);
+
+  const game_ = new Phaser.Game(screenWidth, screenHeight, Phaser.CANVAS, 'game');
+  window.game = game_;
+  game_.state.add('Main', MainState);
+  game_.state.add('Loader', LoaderState);
+  game_.state.add('Title', TitleState);
+  game_.state.add('Level', LevelState);
+  game_.state.add('Shop', ShopState);
+  game_.state.add('GameOver', GameOverState);
+  game_.state.start('Main');
+}
+
+/*
+ * Draw the map's own art instead of the vanilla mural.
+ *
+ * iniLevel() creates lvlGrfx1..6 at fixed offsets and builds platforms as bare
+ * collision rects with no sprite at all -- in vanilla the mural is the only thing
+ * that makes a platform visible. A custom map has no mural, so platforms are
+ * filled flat black and pushed to the very back, and the art layer is drawn over
+ * them in z order.
+ */
+function patchLevelArt() {
+  const origIni = iniLevel;
+  window.iniLevel = function () {
+    origIni.apply(this, arguments);
+
+    // hide the vanilla background art
+    isprt.children.slice().forEach((c) => {
+      if (c.key && /^lvlGrfx/.test(c.key)) c.visible = false;
+    });
+
+    /*
+     * Give the camera a starting frame.
+     *
+     * LevelState.create sets sprt.area = {} and only areaCode() ever fills it,
+     * which needs Johnny to be standing inside a camera area on frame one. In
+     * the vanilla map he always is. Move the spawn outside every area and
+     * centerX/centerY stay undefined, so scrollCode computes
+     *   camera.x += (sprt.x - undefined - camera.x + ...) / smoothness
+     * which is NaN -- and a NaN camera transform is what piles the whole level
+     * into the corner of the screen.
+     *
+     * Defaults roughly match vanilla area 0 (xx 320, yy 400, scaled by 1.25).
+     * A real area still overrides them the moment Johnny enters one.
+     */
+    sprt.area = Object.assign({
+      centerX: 400, centerY: 500, xmin: 0, xmax: 0, ymin: 0, ymax: 0,
+    }, sprt.area || {});
+
+    const ldat = maps[levl];
+
+    // flat black platform bodies, furthest back
+    const g = game.add.graphics(0, 0);
+    g.beginFill(0x000000, 1);
+    for (const p of ldat.plats || []) g.drawRect(p.x, p.y, p.w, p.h);
+    g.endFill();
+    isprt.add(g);
+    isprt.sendToBack(g);
+
+    // the art layer, in z order
+    const art = (ldat.art || []).slice().sort((a, b) => (a.z || 0) - (b.z || 0));
+    for (const a of art) {
+      if (!a.tile || !game.cache.checkImageKey('tile_' + a.tile)) continue;
+      const s = isprt.create(a.x + a.w / 2, a.y + a.h / 2, 'tile_' + a.tile);
+      s.anchor.setTo(0.5);
+      s.width = a.w; s.height = a.h;
+      if (a.rot) s.angle = a.rot;
+      if (a.flipX) s.scale.x *= -1;
+      if (a.flipY) s.scale.y *= -1;
+      s.autoCull = true;
+    }
+  };
+  // level.js calls iniLevel by name from LevelState.create, so the global has to
+  // be the patched one -- which it now is.
+}
+
+// ------------------------------------------------------------------ upgrades
+const upValues = {};
+function buildUpgradePanel() {
+  const host = document.getElementById('ups');
+  for (const u of UPGRADES) {
+    /*
+     * Start maxed. A quick run is for checking whether the level you just drew
+     * works, and starting at zero upgrades means fighting the vanilla progression
+     * before you can even reach most of it. Drag a slider down to test what the
+     * level demands of an under-levelled player.
+     */
+    upValues[u.key] = u.max;
+    const row = document.createElement('div');
+    row.className = 'up';
+    const r = document.createElement('input');
+    r.type = 'range'; r.min = 0; r.max = u.max; r.step = 1; r.value = u.max;
+    const v = document.createElement('span');
+    v.className = 'v'; v.textContent = String(u.max);
+    r.oninput = () => { upValues[u.key] = Number(r.value); v.textContent = r.value; applyUpgrades(); };
+    const lab = document.createElement('label');
+    lab.textContent = u.label;
+    lab.style.gridColumn = '1 / 3';
+    lab.style.color = 'var(--dim)';
+    host.appendChild(lab);
+    row.appendChild(r); row.appendChild(v);
+    host.appendChild(row);
+    u._range = r; u._out = v;
+  }
+  document.getElementById('maxAll').onclick = () => setAll((u) => u.max);
+  document.getElementById('zeroAll').onclick = () => setAll(() => 0);
+  document.getElementById('restart').onclick = () => {
+    applyUpgrades();
+    if (window.game && window.levl !== undefined) { levl = 1; newState(); }
+  };
+  // carry the map id back, so the editor reopens what was being edited rather
+  // than starting on a blank Untitled
+  document.getElementById('back').onclick = () => {
+    location.href = MAP_ID ? '/?map=' + encodeURIComponent(MAP_ID) : '/';
+  };
+}
+function setAll(fn) {
+  for (const u of UPGRADES) {
+    const val = fn(u);
+    upValues[u.key] = val; u._range.value = val; u._out.textContent = String(val);
+  }
+  applyUpgrades();
+}
+/*
+ * Tiers are stored as tenths of a tier, not as counts -- shop.js computes the
+ * real index as Math.round(v * 10) and adds 0.1 per purchase. Writing v = n * 0.1
+ * is what the AP client does too.
+ */
+function applyUpgrades() {
+  if (!window.game || !game.ldat) return;
+  for (const u of UPGRADES) {
+    if (!game.ldat[u.key]) game.ldat[u.key] = { v:0, u:0.1 };
+    game.ldat[u.key].v = upValues[u.key] * 0.1;
+  }
+  if (game.ldat.csh) game.ldat.csh.v = Math.max(game.ldat.csh.v, 999);
+}
+
+boot().catch((e) => setStatus('error: ' + e.message));
+</script>
+</body>
+</html>

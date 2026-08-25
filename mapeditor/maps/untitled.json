@@ -1,0 +1,46 @@
+{
+  "plats": [],
+  "coins": [],
+  "spikes": [],
+  "bombs": [],
+  "lasers": [],
+  "enes": [],
+  "platMove": [],
+  "areas": [],
+  "bossData": {
+    "gate": {
+      "l": 0,
+      "t": 0,
+      "r": 0,
+      "b": 0
+    },
+    "range": {
+      "l": 0,
+      "t": 0,
+      "r": 0,
+      "b": 0
+    }
+  },
+  "door": {
+    "l": 0,
+    "t": 0,
+    "r": 0,
+    "b": 0
+  },
+  "sprt": {
+    "x": 0,
+    "y": 0,
+    "xx": 1
+  },
+  "colGun": {
+    "x": 0,
+    "y": 0
+  },
+  "yEnd": 3000,
+  "art": [],
+  "meta": {
+    "id": "untitled",
+    "name": "Untitled",
+    "modified": "2026-08-25T21:18:01.226Z"
+  }
+}

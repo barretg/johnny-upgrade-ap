@@ -1,0 +1,4 @@
+# Extracted game art. All of it is regenerable from a local SDK copy via
+# tools/harvest-edges.js + tools/extract-tiles.js, and it is Coolmath/Miniclip's
+# artwork -- keep it out of the repo rather than redistributing it.
+tiles/

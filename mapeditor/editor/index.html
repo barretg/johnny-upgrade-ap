@@ -1,0 +1,1421 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Map Editor</title>
+<style>
+  :root {
+    --bg:#14161c; --panel:#1c1f28; --line:#2c3040; --text:#dde1ea; --dim:#8b93a7;
+    --accent:#6ea8fe; --good:#64d19a; --warn:#e8c46a; --bad:#e07a7a;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text); overflow:hidden;
+         font:13px/1.45 ui-sans-serif,system-ui,sans-serif;
+         display:grid; grid-template-columns:200px 1fr 250px; grid-template-rows:42px 1fr; }
+
+  #top { grid-column:1/4; background:var(--panel); border-bottom:1px solid var(--line);
+         display:flex; align-items:center; gap:10px; padding:0 12px; }
+  #top .sp { flex:1; }
+  input[type=text],select { background:#12141a; border:1px solid var(--line); color:var(--text);
+        border-radius:5px; padding:4px 7px; font:inherit; font-size:12px; }
+  button { background:#262b38; border:1px solid var(--line); color:var(--text); border-radius:6px;
+           padding:5px 10px; font:inherit; font-size:11px; cursor:pointer; }
+  button:hover { background:#303748; }
+  button.on { background:var(--accent); border-color:var(--accent); color:#0d1017; font-weight:600; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#0d1017; font-weight:600; }
+
+  aside { background:var(--panel); overflow-y:auto; min-height:0; }
+  #left { border-right:1px solid var(--line); }
+  #right { border-left:1px solid var(--line); }
+  .sec { padding:9px 11px; border-bottom:1px solid var(--line); }
+  .sec h2 { font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:var(--dim);
+            margin:0 0 7px; font-weight:600; }
+  .tools { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+  .tools button { text-align:left; padding:5px 7px; }
+
+  #palette { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+  .tile { background:#12141a; border:1px solid var(--line); border-radius:5px; cursor:pointer;
+          padding:3px; display:grid; gap:3px; justify-items:center; }
+  .tile:hover { border-color:var(--accent); }
+  .tile.sel { border-color:var(--accent); background:#2b3346; }
+  .tile canvas { display:block; image-rendering:pixelated; }
+  .tile span { font-size:9px; color:var(--dim); max-width:78px; overflow:hidden;
+               text-overflow:ellipsis; white-space:nowrap; }
+
+  #stage { position:relative; overflow:hidden; background:#0d0f14; }
+  #cv { position:absolute; top:0; left:0; }
+  #hud { position:absolute; left:10px; bottom:10px; background:#12141ad9; border:1px solid var(--line);
+         border-radius:6px; padding:6px 9px; font-size:11px; color:var(--dim); pointer-events:none; }
+  #hint { position:absolute; right:10px; bottom:10px; background:#12141ad9; border:1px solid var(--line);
+          border-radius:6px; padding:6px 9px; font-size:11px; color:var(--dim); max-width:290px; }
+  kbd { background:#262b38; border:1px solid var(--line); border-bottom-width:2px; border-radius:3px;
+        padding:0 3px; font-size:10px; }
+
+  .row2 { display:grid; grid-template-columns:70px 1fr; gap:6px; align-items:center;
+          color:var(--dim); font-size:11px; margin-bottom:5px; }
+  .row2 input { width:100%; background:#12141a; border:1px solid var(--line); color:var(--text);
+                border-radius:4px; padding:3px 5px; font:inherit; font-size:11px; }
+  #objs { max-height:230px; overflow-y:auto; }
+  .obj { padding:4px 8px; font-size:11px; cursor:pointer; display:flex; gap:6px; align-items:center;
+         border-radius:4px; }
+  .obj:hover { background:#232733; }
+  .obj.sel { background:#2b3346; }
+  .swatch { width:8px; height:8px; border-radius:2px; flex:none; }
+  .muted { color:var(--dim); font-size:10px; }
+  .field { margin-bottom:8px; }
+  .help { color:#6f7688; font-size:10px; line-height:1.35; margin:1px 0 0 76px; }
+  .note { color:var(--warn); font-size:10px; line-height:1.4; background:#2a2519;
+          border:1px solid #3d3520; border-radius:5px; padding:6px 7px; margin:0 0 9px; }
+</style>
+</head>
+<body>
+
+<div id="top">
+  <strong style="font-size:13px">Map Editor</strong>
+  <input type="text" id="mapName" placeholder="map name" style="width:170px">
+  <select id="mapList"><option value="">— open map —</option></select>
+  <button id="newMap">new</button>
+  <button id="fromVanilla">start from vanilla</button>
+  <span class="sp"></span>
+  <span class="muted">grid</span>
+  <select id="grid">
+    <option value="0" selected>free</option>
+    <option value="10">10</option>
+    <option value="25">25</option>
+    <option value="50">50</option>
+    <option value="100">100</option>
+  </select>
+  <button id="artTop" class="on">textures on top</button>
+  <button id="fit">fit</button>
+  <button id="save">save</button>
+  <button id="play" class="primary">play</button>
+</div>
+
+<aside id="left">
+  <div class="sec">
+    <h2>Tools</h2>
+    <div class="tools" id="tools"></div>
+  </div>
+  <div class="sec">
+    <h2>Textures</h2>
+    <div id="palette"></div>
+  </div>
+</aside>
+
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div id="hud">—</div>
+  <div id="hint">
+    <div><kbd>ctrl+click</kbd> pick object + its settings</div>
+    <div><kbd>ctrl+click</kbd> blank = back to select tool</div>
+    <div><kbd>alt+click</kbd> add / remove from selection</div>
+    <div><kbd>drag</kbd> marquee select</div>
+    <div><kbd>corner</kbd> resize &middot; <kbd>space+drag</kbd> pan</div>
+    <div>green handles = door trigger zone</div>
+    <div><kbd>ctrl+z</kbd> undo &middot; <kbd>ctrl+shift+z</kbd> redo</div>
+    <div><kbd>ctrl+c</kbd>/<kbd>ctrl+v</kbd> copy &middot; paste lands at cursor</div>
+    <div><kbd>del</kbd> delete &middot; <kbd>ctrl+d</kbd> duplicate &middot; <kbd>esc</kbd> select tool</div>
+    <div><kbd>[</kbd> <kbd>]</kbd> send back / bring forward (any object)</div>
+    <div><kbd>x</kbd>/<kbd>y</kbd> mirror &middot; <kbd>r</kbd> rotate 90&deg; (textures)</div>
+  </div>
+</div>
+
+<aside id="right">
+  <div class="sec">
+    <h2>Properties</h2>
+    <div id="props"><span class="muted">nothing selected</span></div>
+  </div>
+  <div class="sec">
+    <h2>Objects</h2>
+    <div id="objs"></div>
+  </div>
+</aside>
+
+<script src="/mapkit/mapformat.js"></script>
+<script>
+'use strict';
+/*
+ * Map editor.
+ *
+ * Everything is authored in WORLD coordinates, the same space the game's map data
+ * uses, so what is saved needs no conversion beyond regrouping into the game's
+ * field names. world = muralPixel - (1620, 720), which is also how the tile
+ * provenance is expressed, so textures and geometry share one coordinate system.
+ *
+ * Internally every object is {kind, x, y, w, h, ...props} regardless of how the
+ * game stores it -- the game mixes x/y/w/h rects, l/t/r/b rects and bare points
+ * across its arrays, and normalising that here keeps selection, dragging and
+ * resizing to a single code path. toGame()/fromGame() do the translation.
+ */
+
+// ---------------------------------------------------------------- object kinds
+/*
+ * One definition per kind drives the tool palette, drawing, the properties panel
+ * and serialisation. Adding an entity type should mean adding an entry here, not
+ * touching the interaction code.
+ *
+ *   shape 'rect'  drag to create, resizable
+ *   shape 'point' click to create, fixed icon size
+ *   single: true  only one may exist (spawn, door, boss zones)
+ *   path:         which fields describe a patrol range, drawn as a track
+ */
+const KINDS = {
+  plat: { label:'Platform', shape:'rect', color:'#8ea3c0', fill:'#2a3040', order:1,
+    props:{ semi:0, stomper:0 },
+    fields:{
+      semi:{ type:'bool', label:'One-way',
+        help:'Only the top surface collides. Johnny jumps up through it and lands on top. Drawn with a cyan dashed line along the top edge.' },
+      fallTo:{ type:'number', label:'Falls to', crusher:true,
+        help:'World Y where it comes to rest. Fall distance is this minus the platform y. Blank uses the vanilla -60.' },
+      trigX:{ type:'number', label:'Trigger x', crusher:true,
+        help:'Left edge of the band that sets it off. Blank uses x+200, which is why a narrow crusher never fires in the stock game.' },
+      trigW:{ type:'number', label:'Trigger width', crusher:true,
+        help:'Width of that band. Blank uses 80.' },
+      trigY:{ type:'number', label:'Trigger above Y', crusher:true,
+        help:'Johnny must be above this Y as well. Blank uses 360.' },
+      accel:{ type:'number', label:'Acceleration', crusher:true,
+        help:'Downward acceleration per frame. Blank uses 0.25.' },
+      damage:{ type:'number', label:'Damage', crusher:true,
+        help:'Contact damage. Blank uses 10.' },
+      repeat:{ type:'bool', label:'Resets', crusher:true,
+        help:'Return to the start and arm again after landing. Off matches the stock game, which fires once.' },
+      resetIn:{ type:'number', label:'Reset delay', crusher:true,
+        help:'Frames to wait before returning, when Resets is on. Blank uses 90.' },
+      stomper:{ type:'bool', label:'Crusher',
+        help:'Falls when Johnny walks under it. There is no fall-distance field: it drops from its own y and stops at world y = -60, so distance = -60 minus y. The trigger band is x+200 to x+280 regardless of width, so a crusher narrower than 200px can never be set off. Only ONE crusher works per map, and it fires once. All of these are hardcoded and need patching per map.' },
+    } },
+  art: { label:'Texture', shape:'rect', color:'#c9a6ff', order:2,
+    props:{ tile:'', rot:0, flipX:0, flipY:0, z:0 },
+    fields:{
+      tile:{ type:'text', label:'Tile', help:'Which extracted texture to draw.' },
+      rot:{ type:'number', label:'Rotation', help:'Degrees, clockwise. r rotates 90 at a time.' },
+      flipX:{ type:'bool', label:'Mirror X', help:'Flip horizontally (key x).' },
+      flipY:{ type:'bool', label:'Mirror Y', help:'Flip vertically (key y).' },
+      z:{ type:'number', label:'Z order', help:'Higher draws in front. Keys [ and ].' },
+    } },
+  spike: { label:'Spike', shape:'rect', color:'#e07a7a', fill:'#3a2027', order:3 },
+  coin: { label:'Coin', shape:'point', color:'#e8c46a', order:4, size:24 },
+  ene: { label:'Enemy', shape:'point', color:'#ff9d5c', order:5, size:40,
+    props:{ typ:'robot', xx:4.8, yy:0 }, path:true,
+    fields:{
+      typ:{ type:'select', options:['robot','saw'], label:'Type',
+        help:'robot: killable, and an Archipelago check. saw: hazard only, cannot be killed.' },
+      xx:{ type:'number', label:'Speed X', help:'Horizontal patrol speed in px per frame. 0 to stay put.' },
+      yy:{ type:'number', label:'Speed Y', help:'Vertical patrol speed. Vanilla enemies use 0.' },
+    } },
+  bomb: { label:'Bomb', shape:'point', color:'#ff7ad9', order:6, size:36,
+    props:{ xxsi:-0.02, yysi:0.04, xmax:100, ymax:120 },
+    fields:{
+      xxsi:{ type:'number', label:'Drift rate X', help:'How fast it sweeps horizontally. It drifts on a sine wave rather than patrolling.' },
+      yysi:{ type:'number', label:'Drift rate Y', help:'How fast it sweeps vertically.' },
+      xmax:{ type:'number', label:'Drift width', help:'How far either side of its position it travels.' },
+      ymax:{ type:'number', label:'Drift height', help:'How far above and below it travels.' },
+    } },
+  laser: { label:'Laser', shape:'point', color:'#7ae0ff', order:7, size:28,
+    props:{ ctMax:100, ctSwitch:60, ctCurr:0 },
+    fields:{
+      ctMax:{ type:'number', label:'Cycle length', help:'Frames in one on/off cycle.' },
+      ctSwitch:{ type:'number', label:'Fires at', help:'Point in the cycle the beam turns on.' },
+      ctCurr:{ type:'number', label:'Start phase', help:'Where in the cycle it begins. Stagger this across lasers so they do not all fire together.' },
+    } },
+  platMove: { label:'Moving plat', shape:'point', color:'#64d19a', order:8, size:40,
+    props:{ xx:3, yy:0 }, path:true,
+    fields:{
+      xx:{ type:'number', label:'Speed X', help:'Horizontal speed in px per frame. 0 for a vertical-only lift.' },
+      yy:{ type:'number', label:'Speed Y', help:'Vertical speed. 0 for a horizontal-only tram.' },
+    } },
+  area: { label:'Camera area', shape:'rect', color:'#5c7fff', order:9,
+    props:{ xx:320, yy:300, xmin:0, xmax:0, ymin:0, ymax:0 },
+    note:'Entering this region changes how the camera follows Johnny, and the setting STICKS until he enters another area. Cover the map fairly continuously or the camera keeps an old offset.',
+    fields:{
+      xx:{ type:'number', label:'Offset X', help:'How far left of Johnny the camera sits (multiplied by 1.25). Bigger shows more of what is ahead.' },
+      yy:{ type:'number', label:'Offset Y', help:'Vertical framing offset, same scaling.' },
+      xmin:{ type:'number', label:'Clamp left', help:'Camera cannot scroll left of this. 0 means no clamp, not a clamp at zero.' },
+      xmax:{ type:'number', label:'Clamp right', help:'Camera cannot scroll right of this. 0 means no clamp.' },
+      ymin:{ type:'number', label:'Clamp top', help:'Camera cannot scroll above this. 0 means no clamp.' },
+      ymax:{ type:'number', label:'Clamp bottom', help:'Camera cannot scroll below this. 0 means no clamp.' },
+    } },
+  door: { label:'Door', shape:'rect', color:'#b6ff5c', order:10,
+    props:{ trigger:'start' },
+    note:'Slides shut to block a route. Place as many as you like. The stock game only had one, always closing at level start and always stopping at y=1810.',
+    fields:{
+      trigger:{ type:'select', options:['start','zone','boss','never'], label:'Closes on',
+        help:'start: immediately, as in the stock game. zone: when Johnny enters the trigger box. boss: when the boss fight begins. never: stays put.' },
+      closeTo:{ type:'number', label:'Slides to', door:true,
+        help:'World Y it stops at. Blank slides down by its own height.' },
+      speed:{ type:'number', label:'Speed', door:true,
+        help:'Pixels per frame. Blank uses 1, which is the stock crawl.' },
+      open:{ type:'bool', label:'Opens instead', door:true,
+        help:'Start shut and slide the other way when triggered.' },
+      zx:{ type:'number', label:'Zone x', zone:true, help:'Trigger box, used when Closes on is zone.' },
+      zy:{ type:'number', label:'Zone y', zone:true, help:' ' },
+      zw:{ type:'number', label:'Zone w', zone:true, help:' ' },
+      zh:{ type:'number', label:'Zone h', zone:true, help:' ' },
+    } },
+  bossGate: { label:'Boss gate', shape:'rect', color:'#ffd25c', order:11, single:true,
+    note:'The trigger that starts the boss fight.' },
+  bossRange: { label:'Boss arena', shape:'rect', color:'#ff5c5c', order:12, single:true,
+    note:'Where the boss moves. Vanilla pins the boss rise to absolute Y (1810/2040/2400), so moving this needs those constants patched.' },
+  sprt: { label:'Spawn', shape:'point', color:'#ffffff', order:13, size:48,
+    single:true, props:{ xx:1 },
+    fields:{ xx:{ type:'select', options:[1,-1], label:'Facing', help:'1 faces right, -1 faces left.' } } },
+  colGun: { label:'Gun pickup', shape:'point', color:'#5cffd2', order:14, size:36, single:true,
+    note:'Walking into this sends the Find the Gun check. Being armed comes from the Laser Gun item, not from this pickup.' },
+};
+
+/*
+ * Patrol ranges.
+ *
+ * The game stores a mover as a position plus xmin/xmax and ymin/ymax bounds, and
+ * oscillates each axis between them independently. Two draggable handles at the
+ * opposite corners of that box express both axes at once, which is easier to
+ * reason about than four numbers -- and a wrong patrol range is the classic way
+ * to make a map that looks right and plays wrong.
+ */
+const PATH_FIELDS = ['xmin', 'ymin', 'xmax', 'ymax'];
+
+// ---------------------------------------------------------------- state
+let map = blankMap();
+let sel = [];                 // selected object ids
+let tool = 'select';
+let selTile = null;
+let view = { x: 0, y: 0, z: 0.35 };
+let grid = 0;   // free by default; per-map preference is restored on open
+let nextId = 1;
+let tileImgs = new Map();
+let tileList = [], tileNodes = new Map();
+let artStyle = { rot:0, flipX:0, flipY:0 };
+let undoStack = [], redoStack = [], clipboard = [];  // stacks are reassigned when a session is restored
+let lastWorld = { x:0, y:0 };
+
+/*
+ * Undo by snapshot.
+ *
+ * The object model is a flat array of plain objects, so a JSON snapshot is both
+ * cheap and exactly right -- no need to model each action as a reversible edit,
+ * which is where hand-rolled undo usually goes wrong. The vanilla map is ~300
+ * objects, so a snapshot is tens of kilobytes and the stack is capped anyway.
+ *
+ * pushHistory() is called BEFORE a change, so the stack holds the state to go
+ * back to. Any new edit clears the redo stack, as it should.
+ */
+const HISTORY_MAX = 120;
+// writing to storage on every keystroke of a drag would be wasteful, so coalesce
+let persistTimer = null;
+const schedulePersist = () => {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(persistState, 400);
+};
+const snapshot = () => JSON.stringify({ objects: map.objects, nextId });
+function pushHistory() {
+  undoStack.push(snapshot());
+  schedulePersist();
+  if (undoStack.length > HISTORY_MAX) undoStack.shift();
+  redoStack.length = 0;
+}
+
+/*
+ * Lazy history, for drags.
+ *
+ * A mousedown that selects something also arms a move, but most of those are
+ * just clicks -- committing history there would fill the stack with entries that
+ * undo to an identical map, so ctrl+Z would appear to do nothing several times
+ * before it did anything. Arm on mousedown, commit only once the drag actually
+ * moves something.
+ */
+let pendingHistory = null;
+const armHistory = () => { pendingHistory = snapshot(); };
+function commitHistory() {
+  if (pendingHistory === null) return;
+  undoStack.push(pendingHistory);
+  schedulePersist();
+  if (undoStack.length > HISTORY_MAX) undoStack.shift();
+  redoStack.length = 0;
+  pendingHistory = null;
+}
+function restore(str) {
+  const d = JSON.parse(str);
+  map.objects = d.objects; nextId = d.nextId;
+  sel = sel.filter((id) => map.objects.some((o) => o.id === id));
+  refresh();
+}
+function undo() {
+  if (!undoStack.length) return;
+  redoStack.push(snapshot());
+  restore(undoStack.pop());
+}
+function redo() {
+  if (!redoStack.length) return;
+  undoStack.push(snapshot());
+  restore(redoStack.pop());
+}
+
+function copySel() {
+  clipboard = selected().map((o) => JSON.parse(JSON.stringify(o)));
+}
+/*
+ * Paste lands the copied group under the cursor rather than on top of the
+ * original, which is almost always what you want when duplicating a run of
+ * platforms or a cluster of coins.
+ */
+function paste() {
+  if (!clipboard.length) return;
+  pushHistory();
+  let x0 = Infinity, y0 = Infinity;
+  for (const c of clipboard) { x0 = Math.min(x0, c.x); y0 = Math.min(y0, c.y); }
+  const dx = snap(lastWorld.x) - x0, dy = snap(lastWorld.y) - y0;
+  const made = clipboard.map((c) => {
+    const o = JSON.parse(JSON.stringify(c));
+    o.id = nextId++;
+    o.x += dx; o.y += dy;
+    // a patrol range travels with the thing that patrols it
+    if (o.xmin !== undefined) { o.xmin += dx; o.xmax += dx; o.ymin += dy; o.ymax += dy; }
+    // singletons cannot be duplicated; paste moves the existing one instead
+    if (KINDS[o.kind] && KINDS[o.kind].single) {
+      const ex = map.objects.find((e) => e.kind === o.kind);
+      if (ex) { ex.x = o.x; ex.y = o.y; return ex; }
+    }
+    map.objects.push(o);
+    return o;
+  });
+  sel = made.map((o) => o.id);
+  refresh();
+}
+let dragging = null, spaceDown = false;
+let artOnTop = true;
+
+const stage = document.getElementById('stage');
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+function blankMap() {
+  return { meta:{ id:'', name:'Untitled' }, objects:[], yEnd:3000 };
+}
+
+// ---------------------------------------------------------------- game format
+/*
+ * Conversion lives in mapkit/mapformat.js -- mapkit owns it because mapkit ships. The
+ * editor writes these files and mapkit reads them, so a second copy here would
+ * drift -- the same trap the two normalise paths nearly fell into.
+ */
+const toGame = () => MapFormat.toGame(map);
+function loadGame(g) {
+  const m = MapFormat.fromGame(g, nextId);
+  nextId = m.nextId;
+  map = { meta: m.meta, objects: m.objects, yEnd: m.yEnd };
+  sel = [];
+}
+
+// ---------------------------------------------------------------- helpers
+const K = (o) => KINDS[o.kind];
+const byId = (id) => map.objects.find((o) => o.id === id);
+const selected = () => sel.map(byId).filter(Boolean);
+const snap = (v) => grid ? Math.round(v / grid) * grid : Math.round(v);
+const toWorld = (sx, sy) => ({ x:(sx - view.x) / view.z, y:(sy - view.y) / view.z });
+
+function bounds(o) {
+  const k = K(o);
+  if (k.shape === 'point') { const s = k.size || 32; return { x:o.x - s/2, y:o.y - s/2, w:s, h:s }; }
+  return { x:o.x, y:o.y, w:o.w, h:o.h };
+}
+function hit(o, wx, wy) {
+  const b = bounds(o);
+  return wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h;
+}
+
+// ---------------------------------------------------------------- rendering
+const HANDLE = 8;
+const HSPOTS = [['nw',0,0],['n',.5,0],['ne',1,0],['w',0,.5],['e',1,.5],['sw',0,1],['s',.5,1],['se',1,1]];
+function handlePts(o) {
+  const b = bounds(o);
+  return HSPOTS.map(([id,fx,fy]) => ({ id, x:b.x + b.w*fx, y:b.y + b.h*fy }));
+}
+/*
+ * A door's trigger zone is a second rectangle attached to the object, so it
+ * gets its own handles: eight to resize and one in the middle to move the whole
+ * box. Typing four numbers to position a trigger is the kind of thing that gets
+ * left wrong, and a wrong trigger box is invisible until you play the level.
+ *
+ * Ids are prefixed 'z' so the drag code can tell them from the object's own
+ * resize handles.
+ */
+function hasZone(o) {
+  return o && o.kind === 'door' && o.trigger === 'zone';
+}
+function zoneRect(o) {
+  return { x: o.zx || 0, y: o.zy || 0, w: o.zw || 0, h: o.zh || 0 };
+}
+function zonePts(o) {
+  if (!hasZone(o)) return [];
+  const z = zoneRect(o);
+  if (z.w <= 0 || z.h <= 0) return [];
+  const pts = HSPOTS.map(([id, fx, fy]) => ({ id: 'z' + id, x: z.x + z.w * fx, y: z.y + z.h * fy }));
+  pts.push({ id: 'zmove', x: z.x + z.w / 2, y: z.y + z.h / 2 });
+  return pts;
+}
+
+// Resize or move the trigger zone. Mirrors resize() but writes zx/zy/zw/zh.
+function resizeZone(o, id, mx, my) {
+  const z = zoneRect(o);
+  if (id === 'zmove') {
+    o.zx = snap(mx - z.w / 2);
+    o.zy = snap(my - z.h / 2);
+    refreshProps();
+    return;
+  }
+  const side = id.slice(1);
+  const right = z.x + z.w, bottom = z.y + z.h;
+  let x = z.x, y = z.y, w = z.w, h = z.h;
+  if (side.includes('w')) { x = Math.min(snap(mx), right - 8); w = right - x; }
+  if (side.includes('e')) { w = Math.max(8, snap(mx) - x); }
+  if (side.includes('n')) { y = Math.min(snap(my), bottom - 8); h = bottom - y; }
+  if (side.includes('s')) { h = Math.max(8, snap(my) - y); }
+  o.zx = x; o.zy = y; o.zw = w; o.zh = h;
+  refreshProps();
+}
+function pathPts(o) {
+  if (!K(o) || !K(o).path) return [];
+  return [{ id:'p0', x:o.xmin ?? o.x, y:o.ymin ?? o.y },
+          { id:'p1', x:o.xmax ?? o.x, y:o.ymax ?? o.y }];
+}
+
+function handleAt(sx, sy) {
+  const s = selected();
+  if (s.length !== 1) return null;
+  const near = (p) => Math.abs(sx - (p.x*view.z + view.x)) <= HANDLE/2+3 &&
+                      Math.abs(sy - (p.y*view.z + view.y)) <= HANDLE/2+3;
+  // path and zone handles first: both sit outside the object and would
+  // otherwise be unreachable whenever they overlap its box
+  for (const p of pathPts(s[0])) if (near(p)) return p.id;
+  for (const p of zonePts(s[0])) if (near(p)) return p.id;
+  if (K(s[0]).shape === 'point') return null;
+  for (const p of handlePts(s[0])) if (near(p)) return p.id;
+  return null;
+}
+
+/*
+ * Draw order.
+ *
+ * Textures sit on top of everything else by default. Every other kind is drawn
+ * as an outline or a marker -- editor scaffolding rather than anything the player
+ * sees -- so letting those paint over the art hides the one layer that shows what
+ * the map will actually look like. Selection highlights are still drawn last, so
+ * whatever is selected stays visible through the art.
+ *
+ * The toggle drops textures back among the geometry, for when the scaffolding
+ * underneath is what needs looking at.
+ */
+function drawRank(o) {
+  if (o.kind === 'art') return artOnTop ? 1000 : 2;
+  return K(o) ? K(o).order : 99;
+}
+
+/*
+ * Draw order, and therefore pick order.
+ *
+ * z comes first so anything can be pushed behind anything else regardless of
+ * kind; kind rank only breaks ties, which keeps the defaults (platforms behind,
+ * textures in front) intact while every object still has z = 0.
+ *
+ * On non-texture objects z is purely an editing aid -- it is how you shove a big
+ * platform out of the way to reach a coin underneath -- so it is NOT saved. Only
+ * a texture's z means anything at runtime, and that one does persist.
+ */
+function drawOrder() {
+  return map.objects.slice().sort((a, b) => {
+    const dz = (a.z || 0) - (b.z || 0);
+    if (dz !== 0) return dz;
+    return drawRank(a) - drawRank(b);
+  });
+}
+
+function draw() {
+  const W = stage.clientWidth, H = stage.clientHeight;
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle = '#0d0f14'; ctx.fillRect(0,0,W,H);
+
+  ctx.setTransform(view.z,0,0,view.z,view.x,view.y);
+  drawGrid();
+
+  const ordered = drawOrder();
+  for (const o of ordered) drawObject(o);
+  for (const o of selected()) drawSelection(o);
+  if (dragging && dragging.marquee) drawMarquee(dragging);
+  requestAnimationFrame(draw);
+}
+
+function drawGrid() {
+  if (!grid || view.z < 0.15) return;
+  const W = stage.clientWidth / view.z, H = stage.clientHeight / view.z;
+  const x0 = Math.floor(-view.x / view.z / grid) * grid, y0 = Math.floor(-view.y / view.z / grid) * grid;
+  ctx.lineWidth = 1 / view.z;
+  ctx.strokeStyle = 'rgba(120,140,190,0.10)';
+  ctx.beginPath();
+  for (let x = x0; x < x0 + W + grid; x += grid) { ctx.moveTo(x, y0); ctx.lineTo(x, y0 + H + grid); }
+  for (let y = y0; y < y0 + H + grid; y += grid) { ctx.moveTo(x0, y); ctx.lineTo(x0 + W + grid, y); }
+  ctx.stroke();
+  // world origin
+  ctx.strokeStyle = 'rgba(255,90,90,0.5)';
+  ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(0, y0+H+grid);
+  ctx.moveTo(x0, 0); ctx.lineTo(x0+W+grid, 0); ctx.stroke();
+}
+
+function drawObject(o) {
+  const k = K(o); if (!k) return;
+  const b = bounds(o);
+  if (o.kind === 'art') return drawArt(o);
+
+  ctx.lineWidth = 1.5 / view.z;
+  if (k.shape === 'rect') {
+    if (k.fill) { ctx.fillStyle = k.fill; ctx.fillRect(b.x, b.y, b.w, b.h); }
+    ctx.strokeStyle = k.color;
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+    if (o.kind === 'plat' && o.semi) {
+      // One-way platform. The cyan edge marks the only surface that collides;
+      // the chevrons point the way Johnny can pass through it.
+      ctx.strokeStyle = '#7ae0ff';
+      ctx.lineWidth = 3 / view.z;
+      ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x+b.w, b.y); ctx.stroke();
+      ctx.lineWidth = 1.5 / view.z;
+      const step = Math.max(30, b.w / 8), a = 7 / view.z;
+      ctx.beginPath();
+      for (let cx = b.x + step/2; cx < b.x + b.w; cx += step) {
+        ctx.moveTo(cx - a, b.y + a*1.6); ctx.lineTo(cx, b.y + a*0.4); ctx.lineTo(cx + a, b.y + a*1.6);
+      }
+      ctx.stroke();
+    }
+  } else {
+    ctx.strokeStyle = k.color;
+    ctx.fillStyle = k.color + '33';
+    ctx.beginPath(); ctx.arc(o.x, o.y, (k.size||32)/2, 0, Math.PI*2);
+    ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(o.x-4/view.z, o.y); ctx.lineTo(o.x+4/view.z, o.y);
+    ctx.moveTo(o.x, o.y-4/view.z); ctx.lineTo(o.x, o.y+4/view.z); ctx.stroke();
+  }
+  if (k.path) drawPath(o, k);
+  if (o.kind === 'plat' && o.stomper) drawCrusher(o);
+  if (o.kind === 'door') drawDoor(o);
+}
+
+/*
+ * A crusher hides three hardcoded numbers that decide whether it works at all,
+ * so they are drawn rather than left to be discovered by playing:
+ *
+ *   it stops at world y = -60, so its fall distance is fixed by its own y
+ *   it triggers on Johnny crossing x+200..x+280, whatever its width
+ *   it also needs Johnny above y = 360
+ *
+ * The band not scaling with width is the trap: make one narrower than 200px and
+ * the trigger sits past its right edge, so it can never fire.
+ */
+/*
+ * A door hides where it ends up and what sets it off, so both are drawn.
+ */
+function drawDoor(o) {
+  const to = (typeof o.closeTo === 'number') ? o.closeTo : o.y + o.h;
+  ctx.lineWidth = 1.5 / view.z;
+  ctx.strokeStyle = '#b6ff5c';
+  ctx.setLineDash([6 / view.z, 4 / view.z]);
+  ctx.strokeRect(o.x, to, o.w, o.h);
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(182,255,92,0.08)';
+  ctx.fillRect(o.x, Math.min(o.y, to), o.w, Math.abs(to - o.y) + o.h);
+  if (o.trigger === 'zone' && o.zw > 0 && o.zh > 0) {
+    ctx.fillStyle = 'rgba(182,255,92,0.13)';
+    ctx.fillRect(o.zx, o.zy, o.zw, o.zh);
+    ctx.strokeStyle = '#b6ff5c';
+    ctx.setLineDash([4 / view.z, 3 / view.z]);
+    ctx.strokeRect(o.zx, o.zy, o.zw, o.zh);
+    ctx.setLineDash([]);
+  }
+}
+
+const CRUSHER_STOP_Y = -60;
+function drawCrusher(o) {
+  // mirrors the runtime defaults in mapkit/crushers.js
+  const landY = (typeof o.fallTo === 'number') ? o.fallTo : CRUSHER_STOP_Y;
+  ctx.lineWidth = 1.5 / view.z;
+
+  // where it comes to rest
+  ctx.strokeStyle = '#ff5c5c';
+  ctx.setLineDash([6 / view.z, 4 / view.z]);
+  ctx.strokeRect(o.x, landY, o.w, o.h);
+  ctx.setLineDash([]);
+
+  // the swept path
+  ctx.fillStyle = 'rgba(255,92,92,0.08)';
+  ctx.fillRect(o.x, o.y, o.w, landY - o.y);
+
+  // trigger band, fixed at x+200..x+280
+  const bx = (typeof o.trigX === 'number') ? o.trigX : o.x + 200;
+  const bw = (typeof o.trigW === 'number') ? o.trigW : 80;
+  // with configurable bands the old 'unreachable' warning only applies to the
+  // default, so warn on overlap with the platform instead
+  const reachable = bx + bw > o.x && bx < o.x + o.w;
+  ctx.fillStyle = reachable ? 'rgba(255,210,92,0.22)' : 'rgba(255,92,92,0.30)';
+  ctx.fillRect(bx, o.y, bw, Math.max(o.h, 40));
+  ctx.strokeStyle = reachable ? '#ffd25c' : '#ff5c5c';
+  ctx.strokeRect(bx, o.y, bw, Math.max(o.h, 40));
+}
+
+/*
+ * Patrol tracks. A moving platform or enemy is stored as a position plus min/max
+ * bounds, which is invisible unless drawn -- and getting them wrong is the
+ * easiest way to make a map that looks right and plays wrong.
+ */
+function drawPath(o, k) {
+  const x1 = o.xmin ?? o.x, x2 = o.xmax ?? o.x;
+  const y1 = o.ymin ?? o.y, y2 = o.ymax ?? o.y;
+  if (x1 === x2 && y1 === y2) return;
+  ctx.strokeStyle = k.color + '99';
+  ctx.lineWidth = 2 / view.z;
+  ctx.setLineDash([6/view.z, 5/view.z]);
+  ctx.beginPath(); ctx.moveTo(x1, (y1+y2)/2); ctx.lineTo(x2, (y1+y2)/2);
+  if (y1 !== y2) { ctx.moveTo((x1+x2)/2, y1); ctx.lineTo((x1+x2)/2, y2); }
+  ctx.stroke(); ctx.setLineDash([]);
+  const dot = (x,y) => { ctx.beginPath(); ctx.arc(x,y,5/view.z,0,Math.PI*2); ctx.fill(); };
+  ctx.fillStyle = k.color;
+  dot(x1,(y1+y2)/2); dot(x2,(y1+y2)/2);
+}
+
+function drawArt(o) {
+  const img = tileImgs.get(o.tile);
+  ctx.save();
+  ctx.translate(o.x + o.w/2, o.y + o.h/2);
+  if (o.rot) ctx.rotate(o.rot * Math.PI / 180);
+  ctx.scale(o.flipX ? -1 : 1, o.flipY ? -1 : 1);
+  if (img && img.complete) ctx.drawImage(img, -o.w/2, -o.h/2, o.w, o.h);
+  else { ctx.fillStyle = '#c9a6ff33'; ctx.fillRect(-o.w/2, -o.h/2, o.w, o.h); }
+  ctx.restore();
+}
+
+function drawMarquee(m) {
+  const x = Math.min(m.x0, m.x1), y = Math.min(m.y0, m.y1);
+  const w = Math.abs(m.x1 - m.x0), h = Math.abs(m.y1 - m.y0);
+  ctx.fillStyle = 'rgba(110,168,254,0.12)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#6ea8fe';
+  ctx.lineWidth = 1 / view.z;
+  ctx.setLineDash([4 / view.z, 3 / view.z]);
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+}
+
+function drawSelection(o) {
+  const b = bounds(o);
+  ctx.lineWidth = 1.5 / view.z;
+  ctx.strokeStyle = '#6ea8fe';
+  ctx.setLineDash([5/view.z, 4/view.z]);
+  ctx.strokeRect(b.x, b.y, b.w, b.h);
+  ctx.setLineDash([]);
+  // trigger-zone handles, draggable
+  for (const p of zonePts(o)) {
+    const r = (p.id === 'zmove' ? HANDLE + 4 : HANDLE) / view.z;
+    ctx.fillStyle = p.id === 'zmove' ? '#b6ff5c' : '#0d0f14';
+    ctx.strokeStyle = '#b6ff5c';
+    ctx.lineWidth = 1.5 / view.z;
+    ctx.beginPath();
+    if (p.id === 'zmove') ctx.arc(p.x, p.y, r / 2, 0, Math.PI * 2);
+    else ctx.rect(p.x - r / 2, p.y - r / 2, r, r);
+    ctx.fill(); ctx.stroke();
+  }
+  // patrol endpoints, draggable
+  for (const p of pathPts(o)) {
+    const r = (HANDLE + 2) / view.z;
+    ctx.fillStyle = K(o).color; ctx.strokeStyle = '#0d0f14';
+    ctx.lineWidth = 2 / view.z;
+    ctx.beginPath(); ctx.arc(p.x, p.y, r/2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  }
+  if (K(o).shape === 'point') return;
+  const hs = HANDLE / view.z;
+  for (const p of handlePts(o)) {
+    ctx.fillStyle = '#0d0f14'; ctx.strokeStyle = '#6ea8fe';
+    ctx.beginPath(); ctx.rect(p.x-hs/2, p.y-hs/2, hs, hs); ctx.fill(); ctx.stroke();
+  }
+}
+
+// ---------------------------------------------------------------- interaction
+const topmostAt = (wx, wy) => drawOrder().reverse().find((o) => hit(o, wx, wy));
+
+function beginMove(w) {
+  armHistory();
+  dragging = { move:true, wx:w.x, wy:w.y, start:selected().map((o)=>({ o, x:o.x, y:o.y })) };
+}
+function pick(o, additive) {
+  if (additive) sel.includes(o.id) ? sel = sel.filter((i)=>i!==o.id) : sel.push(o.id);
+  else if (!sel.includes(o.id)) sel = [o.id];
+  refresh();
+}
+
+stage.addEventListener('mousedown', (e) => {
+  const w = toWorld(e.offsetX, e.offsetY);
+  const h = spaceDown ? null : handleAt(e.offsetX, e.offsetY);
+  if (h) { armHistory(); dragging = { handle:h, o:selected()[0] }; return; }
+  if (spaceDown || e.button === 1) {
+    dragging = { pan:true, sx:e.offsetX, sy:e.offsetY, vx:view.x, vy:view.y };
+    return;
+  }
+
+  /*
+   * Ctrl is the eyedropper, and works whatever tool is armed. On an object it
+   * selects and adopts its settings; on blank space it drops back to the select
+   * tool, which is the usual reason for reaching for the toolbar mid-edit.
+   */
+  if (e.ctrlKey || e.metaKey) {
+    const under = topmostAt(w.x, w.y);
+    if (under) { pick(under, false); adoptFrom(under); beginMove(w); }
+    else { setTool('select'); sel = []; refresh(); }
+    return;
+  }
+
+  /*
+   * Alt adds to the selection: on an object it toggles that one in or out, on
+   * blank space it marquees without clearing what is already picked.
+   */
+  if (e.altKey) {
+    const under = topmostAt(w.x, w.y);
+    if (under) { pick(under, true); beginMove(w); }
+    else { dragging = { marquee:true, x0:w.x, y0:w.y, x1:w.x, y1:w.y, add:true }; }
+    return;
+  }
+
+  if (tool !== 'select') {
+    // A freshly drawn box stays live: dragging it moves it, so it can be placed
+    // roughly and then nudged without a trip back to the select tool. Clicking
+    // off it is what commits it and starts the next one.
+    const held = selected().find((o) => hit(o, w.x, w.y));
+    if (held) { beginMove(w); return; }
+    // Clicking away from a live selection commits it and clears it. Only the
+    // NEXT click places another, so a stray click never drops an object you
+    // did not want.
+    if (sel.length) { sel = []; refresh(); return; }
+    startCreate(w);
+    return;
+  }
+
+  const under = topmostAt(w.x, w.y);
+  if (under) { pick(under, e.shiftKey); beginMove(w); return; }
+  // Empty space with the select tool draws a marquee. Panning stays on
+  // space+drag and the middle button, which is where it was already.
+  if (!e.shiftKey) { sel = []; refresh(); }
+  dragging = { marquee:true, x0:w.x, y0:w.y, x1:w.x, y1:w.y, add:e.shiftKey };
+});
+
+function startCreate(w) {
+  pushHistory();
+  const k = KINDS[tool];
+  if (k.single) {
+    const existing = map.objects.find((o) => o.kind === tool);
+    if (existing) { existing.x = snap(w.x); existing.y = snap(w.y); sel = [existing.id]; refresh(); return; }
+  }
+  const o = { id:nextId++, kind:tool, x:snap(w.x), y:snap(w.y), w:0, h:0, ...(k.props||{}) };
+  if (tool === 'art') {
+    if (!selTile) return;
+    o.tile = selTile.name; o.w = selTile.w; o.h = selTile.h;
+    o.rot = artStyle.rot; o.flipX = artStyle.flipX; o.flipY = artStyle.flipY;
+  }
+  if (k.shape === 'point') { o.w = 0; o.h = 0; }
+  if (k.path) { o.xmin = o.x; o.xmax = o.x; o.ymin = o.y; o.ymax = o.y; }
+  if (tool === 'door') { o.zx = o.x - 200; o.zy = o.y - 100; o.zw = 400; o.zh = 300; }
+  map.objects.push(o);
+  sel = [o.id];
+  refresh();
+  if (k.shape === 'rect' && tool !== 'art') dragging = { create:o, ox:o.x, oy:o.y };
+}
+
+window.addEventListener('mousemove', (e) => {
+  lastWorld = toWorld(e.offsetX, e.offsetY);
+  if (!dragging) return;
+  const w = toWorld(e.offsetX, e.offsetY);
+  if (dragging.pan) {
+    view.x = dragging.vx + (e.offsetX - dragging.sx);
+    view.y = dragging.vy + (e.offsetY - dragging.sy);
+  } else if (dragging.marquee) {
+    dragging.x1 = w.x; dragging.y1 = w.y;
+  } else if (dragging.create) {
+    commitHistory();
+    const o = dragging.create;
+    o.x = snap(Math.min(dragging.ox, w.x)); o.y = snap(Math.min(dragging.oy, w.y));
+    o.w = Math.max(grid || 1, snap(Math.abs(w.x - dragging.ox)));
+    o.h = Math.max(grid || 1, snap(Math.abs(w.y - dragging.oy)));
+    refreshProps();
+  } else if (typeof dragging.handle === 'string' && dragging.handle[0] === 'z') {
+    commitHistory();
+    resizeZone(dragging.o, dragging.handle, w.x, w.y);
+  } else if (dragging.handle === 'p0' || dragging.handle === 'p1') {
+    commitHistory();
+    const o = dragging.o;
+    if (dragging.handle === 'p0') { o.xmin = snap(w.x); o.ymin = snap(w.y); }
+    else { o.xmax = snap(w.x); o.ymax = snap(w.y); }
+    refreshProps();
+  } else if (dragging.handle) {
+    commitHistory();
+    resize(dragging.o, dragging.handle, w.x, w.y, e.shiftKey);
+  } else if (dragging.move) {
+    commitHistory();
+    const dx = w.x - dragging.wx, dy = w.y - dragging.wy;
+    for (const s of dragging.start) {
+      s.o.x = snap(s.x + dx); s.o.y = snap(s.y + dy);
+      // a patrol range travels with the thing that patrols it
+      const k = K(s.o);
+      if (k.path && s.o.xmin !== undefined) {
+        const ddx = s.o.x - s.x, ddy = s.o.y - s.y;
+        if (!s.px) s.px = { xmin:s.o.xmin, xmax:s.o.xmax, ymin:s.o.ymin, ymax:s.o.ymax };
+        s.o.xmin = s.px.xmin + ddx; s.o.xmax = s.px.xmax + ddx;
+        s.o.ymin = s.px.ymin + ddy; s.o.ymax = s.px.ymax + ddy;
+      }
+    }
+    refreshProps();
+  }
+  hud(w);
+});
+window.addEventListener('mouseup', () => {
+  pendingHistory = null;
+  if (dragging?.create) { const o = dragging.create; if (o.w < 2 || o.h < 2) { o.w = grid||40; o.h = grid||40; } }
+  if (dragging?.marquee) {
+    const m = dragging;
+    const x0 = Math.min(m.x0, m.x1), x1 = Math.max(m.x0, m.x1);
+    const y0 = Math.min(m.y0, m.y1), y1 = Math.max(m.y0, m.y1);
+    // a click rather than a drag: leave the selection alone
+    if (Math.abs(x1 - x0) > 3 || Math.abs(y1 - y0) > 3) {
+      const inside = map.objects.filter((o) => {
+        const b = bounds(o);
+        return b.x + b.w >= x0 && b.x <= x1 && b.y + b.h >= y0 && b.y <= y1;
+      }).map((o) => o.id);
+      sel = m.add ? [...new Set([...sel, ...inside])] : inside;
+    }
+  }
+  /*
+   * Only refresh if this mouseup actually ended a canvas drag.
+   *
+   * Refreshing unconditionally broke every control in the properties panel. A
+   * checkbox fires mousedown -> mouseup -> click -> change, so an unconditional
+   * rebuild here tore the panel down and recreated it from the OLD value before
+   * the change handler ever ran, leaving the controls looking immutable. Text
+   * fields and dropdowns had the same problem, since their change fires on blur
+   * or after mouseup too.
+   *
+   * Nothing in the side panels ever sets `dragging` -- mousedown is bound to the
+   * canvas alone -- so this is a reliable test for "was this a canvas drag".
+   */
+  const wasDragging = dragging !== null;
+  dragging = null;
+  if (wasDragging) refresh();
+});
+
+function resize(o, id, mx, my, free) {
+  const b = bounds(o);
+  const right = b.x + b.w, bottom = b.y + b.h;
+  let x = b.x, y = b.y, w = b.w, h = b.h;
+  if (id.includes('w')) { x = Math.min(snap(mx), right - 2); w = right - x; }
+  if (id.includes('e')) { w = Math.max(2, snap(mx) - x); }
+  if (id.includes('n')) { y = Math.min(snap(my), bottom - 2); h = bottom - y; }
+  if (id.includes('s')) { h = Math.max(2, snap(my) - y); }
+  // textures keep their aspect on a corner unless shift frees it
+  if (o.kind === 'art' && id.length === 2 && !free) {
+    const t = tileImgs.get(o.tile);
+    if (t && t.naturalWidth) {
+      const s = Math.max(w / t.naturalWidth, h / t.naturalHeight);
+      const nw = Math.round(t.naturalWidth * s), nh = Math.round(t.naturalHeight * s);
+      if (id.includes('w')) x = right - nw;
+      if (id.includes('n')) y = bottom - nh;
+      w = nw; h = nh;
+    }
+  }
+  o.x = x; o.y = y; o.w = w; o.h = h;
+  refreshProps();
+}
+
+stage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const before = toWorld(e.offsetX, e.offsetY);
+  view.z = Math.max(0.05, Math.min(8, view.z * (e.deltaY < 0 ? 1.12 : 1/1.12)));
+  view.x = e.offsetX - before.x * view.z;
+  view.y = e.offsetY - before.y * view.z;
+}, { passive:false });
+
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.code === 'Space') { spaceDown = true; e.preventDefault(); return; }
+  const s = selected();
+  const step = e.shiftKey ? (grid || 10) : 1;
+  if (e.ctrlKey || e.metaKey) {
+    const k = e.key.toLowerCase();
+    if (k === 'z') { e.shiftKey ? redo() : undo(); e.preventDefault(); return; }
+    if (k === 'y') { redo(); e.preventDefault(); return; }
+    if (k === 'c') { copySel(); e.preventDefault(); return; }
+    if (k === 'v') { paste(); e.preventDefault(); return; }
+  }
+  if (/^Arrow/.test(e.key) && !e.repeat && s.length) pushHistory();
+  if (e.key === 'Escape') { setTool('select'); }
+  else if (e.key === 'Delete' || e.key === 'Backspace') {
+    pushHistory();
+    map.objects = map.objects.filter((o) => !sel.includes(o.id)); sel = []; refresh(); e.preventDefault();
+  }
+  else if (e.key === 'd' && e.ctrlKey) {
+    pushHistory();
+    const copies = s.map((o) => ({ ...o, id:nextId++, x:o.x + (grid||20), y:o.y + (grid||20) }));
+    map.objects.push(...copies); sel = copies.map((c)=>c.id); refresh(); e.preventDefault();
+  }
+  else if (e.key === 'ArrowLeft') { s.forEach((o)=>o.x -= step); refresh(); e.preventDefault(); }
+  else if (e.key === 'ArrowRight') { s.forEach((o)=>o.x += step); refresh(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { s.forEach((o)=>o.y -= step); refresh(); e.preventDefault(); }
+  else if (e.key === 'ArrowDown') { s.forEach((o)=>o.y += step); refresh(); e.preventDefault(); }
+  else if (e.key === '[') { if(!e.repeat) pushHistory(); s.forEach((o)=>{ o.z = (o.z||0) - 1; if(o.kind==='art') artStyle.z = o.z; }); refresh(); }
+  else if (e.key === ']') { if(!e.repeat) pushHistory(); s.forEach((o)=>{ o.z = (o.z||0) + 1; if(o.kind==='art') artStyle.z = o.z; }); refresh(); }
+  else if (e.key === 'x') { pushHistory(); s.forEach((o)=>{ if(o.kind==='art') { o.flipX = o.flipX?0:1; artStyle.flipX = o.flipX; } }); refresh(); }
+  else if (e.key === 'y') { pushHistory(); s.forEach((o)=>{ if(o.kind==='art') { o.flipY = o.flipY?0:1; artStyle.flipY = o.flipY; } }); refresh(); }
+  else if (e.key === 'r') { pushHistory(); s.forEach((o)=>{ if(o.kind==='art') { o.rot = ((o.rot||0) + 90) % 360; artStyle.rot = o.rot; } }); refresh(); }
+});
+window.addEventListener('keyup', (e) => { if (e.code === 'Space') spaceDown = false; });
+
+// ---------------------------------------------------------------- panels
+function setTool(t) {
+  tool = t;
+  [...document.querySelectorAll('#tools button')].forEach((b) =>
+    b.classList.toggle('on', b.dataset.tool === t));
+}
+
+function buildTools() {
+  const el = document.getElementById('tools');
+  el.innerHTML = '';
+  const mk = (id, label) => {
+    const b = document.createElement('button');
+    b.dataset.tool = id; b.textContent = label;
+    b.onclick = () => setTool(id);
+    el.appendChild(b);
+  };
+  mk('select', 'Select');
+  Object.entries(KINDS).sort((a,b)=>a[1].order-b[1].order).forEach(([id,k]) => mk(id, k.label));
+  setTool('select');
+}
+
+function buildPalette(tiles) {
+  const el = document.getElementById('palette');
+  el.innerHTML = '';
+  tileList = tiles; tileNodes.clear();
+  for (const t of tiles) {
+    const img = new Image();
+    img.src = '/tile/' + encodeURIComponent(t.name) + '.png';
+    tileImgs.set(t.name, img);
+    const d = document.createElement('div');
+    d.className = 'tile';
+    const c = document.createElement('canvas');
+    const f = Math.min(74 / t.w, 42 / t.h, 1);
+    c.width = Math.max(1, Math.round(t.w * f)); c.height = Math.max(1, Math.round(t.h * f));
+    img.onload = () => c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    const s = document.createElement('span'); s.textContent = t.name.replace(/_/g,' ');
+    d.appendChild(c); d.appendChild(s);
+    d.title = t.name + '  ' + t.w + 'x' + t.h;
+    d.onclick = () => pickTile(t.name);
+    tileNodes.set(t.name, d);
+    el.appendChild(d);
+  }
+}
+
+/*
+ * Properties panel.
+ *
+ * Rendered from each kind's field metadata rather than dumping raw numbers:
+ * toggles become checkboxes, fixed choices become dropdowns, and every field
+ * carries a plain-language label with the game's real field name and an
+ * explanation underneath. Several of these fields are impossible to guess from
+ * their names -- xx means camera offset on an area and patrol speed on a mover,
+ * and a 0 clamp means no clamp rather than a clamp at zero.
+ */
+/*
+ * Select a texture in the palette, from the palette or from an object on canvas.
+ */
+function pickTile(name) {
+  const t = tileList.find((x) => x.name === name);
+  if (!t) return;
+  selTile = t;
+  setTool('art');
+  tileNodes.forEach((n) => n.classList.remove('sel'));
+  const node = tileNodes.get(name);
+  if (node) { node.classList.add('sel'); node.scrollIntoView({ block:'nearest' }); }
+}
+
+/*
+ * Alt-click picks up an object's settings as well as selecting it: the tool
+ * switches to that kind, and for a texture the palette selection and its
+ * rotation and mirroring come with it. That makes alt-click an eyedropper --
+ * click an existing piece, then carry on stamping more of the same instead of
+ * hunting the palette and redoing the transform each time.
+ */
+function adoptFrom(o) {
+  if (!KINDS[o.kind]) return;
+  if (o.kind === 'art') {
+    artStyle = { rot:o.rot || 0, flipX:o.flipX || 0, flipY:o.flipY || 0 };
+    pickTile(o.tile);
+  } else {
+    setTool(o.kind);
+  }
+}
+
+function refreshProps() {
+  const el = document.getElementById('props');
+  const s = selected();
+  if (!s.length) { el.innerHTML = '<span class="muted">nothing selected</span>'; return; }
+  if (s.length > 1) { el.innerHTML = '<span class="muted">' + s.length + ' objects selected</span>'; return; }
+  const o = s[0], k = K(o);
+  el.innerHTML = '';
+
+  const head = document.createElement('div');
+  head.className = 'muted';
+  head.style.marginBottom = '7px';
+  head.textContent = k.label + '  #' + o.id;
+  el.appendChild(head);
+
+  if (k.note) {
+    const n = document.createElement('div');
+    n.className = 'note';
+    n.textContent = k.note;
+    el.appendChild(n);
+  }
+
+  const addRow = (field, meta) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'field';
+    const row = document.createElement('div');
+    row.className = 'row2';
+    const lab = document.createElement('span');
+    lab.textContent = meta.label || field;
+    lab.title = 'game field: ' + field;
+    row.appendChild(lab);
+
+    let input;
+    if (meta.type === 'bool') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !!o[field];
+      input.style.width = 'auto';
+      input.onchange = () => {
+        pushHistory();
+        o[field] = input.checked ? 1 : 0;
+        refreshObjs();
+        // toggling Crusher changes which fields are relevant
+        if (field === 'stomper') refreshProps();
+      };
+    } else if (meta.type === 'select') {
+      input = document.createElement('select');
+      for (const opt of meta.options) {
+        const op = document.createElement('option');
+        op.value = String(opt); op.textContent = String(opt);
+        if (String(o[field]) === String(opt)) op.selected = true;
+        input.appendChild(op);
+      }
+      input.onchange = () => {
+        pushHistory();
+        const v = input.value;
+        o[field] = isNaN(Number(v)) ? v : Number(v);
+        refreshObjs();
+        if (field === 'trigger') refreshProps();
+      };
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.value = o[field] ?? '';
+      input.onchange = () => {
+        pushHistory();
+        const v = input.value;
+        o[field] = (v !== '' && !isNaN(Number(v))) ? Number(v) : v;
+        refreshObjs();
+      };
+    }
+    row.appendChild(input);
+    wrap.appendChild(row);
+    if (meta.help) {
+      const h = document.createElement('div');
+      h.className = 'help';
+      h.textContent = meta.help;
+      wrap.appendChild(h);
+    }
+    el.appendChild(wrap);
+  };
+
+  addRow('x', { type:'number', label:'x' });
+  addRow('y', { type:'number', label:'y' });
+  if (k.shape === 'rect') {
+    addRow('w', { type:'number', label:'width' });
+    addRow('h', { type:'number', label:'height' });
+  }
+  const fields = k.fields || {};
+  // crusher settings are noise on an ordinary platform, so they only appear
+  // once the Crusher box is ticked
+  Object.keys(k.props || {}).forEach((p) => addRow(p, fields[p] || { type:'number', label:p }));
+  Object.keys(fields).forEach((p) => {
+    const meta = fields[p];
+    if (meta.crusher && !o.stomper) return;
+    if (meta.zone && o.trigger !== 'zone') return;
+    if (!meta.crusher && !meta.zone && !meta.door) return;
+    addRow(p, meta);
+  });
+  if (o.kind !== 'art') {
+    addRow('z', { type:'number', label:'Z order',
+      help:'Editing aid only, and not saved. Lower it ([) to push this behind other objects so you can click what is underneath; raise it (]) to bring it forward.' });
+  }
+
+  if (k.path) {
+    const sep = document.createElement('div');
+    sep.className = 'note';
+    sep.textContent = 'Patrol range. Drag the two round handles on the canvas, or set the bounds here. Leave them equal to the position for a stationary object.';
+    el.appendChild(sep);
+    PATH_FIELDS.forEach((p) => addRow(p, {
+      type:'number', label:p,
+      help: p.startsWith('x') ? 'Horizontal travel limit.' : 'Vertical travel limit.' }));
+  }
+}
+
+function refreshObjs() {
+  const el = document.getElementById('objs');
+  el.innerHTML = '';
+  const list = [...map.objects].sort((a,b)=>(K(a)?.order||99)-(K(b)?.order||99));
+  for (const o of list) {
+    const d = document.createElement('div');
+    d.className = 'obj' + (sel.includes(o.id) ? ' sel' : '');
+    const k = K(o) || { label:o.kind, color:'#888' };
+    d.innerHTML = '<span class="swatch" style="background:' + k.color + '"></span>';
+    d.appendChild(document.createTextNode(k.label + (o.kind==='art' ? ' · ' + o.tile.replace(/_/g,' ') : '') +
+      '  (' + Math.round(o.x) + ',' + Math.round(o.y) + ')'));
+    d.onclick = () => { sel = [o.id]; refresh(); };
+    el.appendChild(d);
+  }
+}
+
+const refresh = () => { refreshProps(); refreshObjs(); };
+function hud(w) {
+  document.getElementById('hud').textContent =
+    'world ' + Math.round(w.x) + ', ' + Math.round(w.y) +
+    '   grid ' + (grid || 'free') + '   objects ' + map.objects.length +
+    '   zoom ' + view.z.toFixed(2) + 'x';
+}
+
+// ---------------------------------------------------------------- view helpers
+function fitView() {
+  const b = mapBounds();
+  const z = Math.min(stage.clientWidth / b.w, stage.clientHeight / b.h) * 0.92;
+  view.z = Math.max(0.05, Math.min(4, z));
+  view.x = stage.clientWidth/2 - (b.x + b.w/2) * view.z;
+  view.y = stage.clientHeight/2 - (b.y + b.h/2) * view.z;
+}
+function mapBounds() {
+  if (!map.objects.length) return { x:-1620, y:-720, w:5130, h:3330 };
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for (const o of map.objects) {
+    const b = bounds(o);
+    x0=Math.min(x0,b.x); y0=Math.min(y0,b.y); x1=Math.max(x1,b.x+b.w); y1=Math.max(y1,b.y+b.h);
+  }
+  return { x:x0, y:y0, w:Math.max(1,x1-x0), h:Math.max(1,y1-y0) };
+}
+
+/*
+ * Thumbnail for the level select grid: the map canvas rendered to a small PNG on
+ * save, so it can never drift from the map it depicts.
+ */
+function thumbnail() {
+  const TW = 320, TH = 200;
+  const c = document.createElement('canvas'); c.width = TW; c.height = TH;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0d0f14'; g.fillRect(0,0,TW,TH);
+  const b = mapBounds();
+  const z = Math.min(TW/b.w, TH/b.h) * 0.94;
+  g.setTransform(z,0,0,z, TW/2 - (b.x+b.w/2)*z, TH/2 - (b.y+b.h/2)*z);
+  const ordered = [...map.objects].sort((a,b2)=>(K(a)?.order||99)-(K(b2)?.order||99));
+  for (const o of ordered) {
+    const k = K(o); if (!k) continue;
+    const bb = bounds(o);
+    if (o.kind === 'art') {
+      const img = tileImgs.get(o.tile);
+      if (img && img.complete) { g.drawImage(img, bb.x, bb.y, bb.w, bb.h); continue; }
+    }
+    g.fillStyle = k.fill || (k.color + '55');
+    g.fillRect(bb.x, bb.y, Math.max(bb.w, 4/z), Math.max(bb.h, 4/z));
+  }
+  return c.toDataURL('image/png');
+}
+
+// ---------------------------------------------------------------- io
+/*
+ * Rebuild the open-map dropdown. Keeps the current selection if it still
+ * exists, and shows when each map was last saved so the newest is obvious.
+ */
+function fillMapList(maps, keep) {
+  const ml = document.getElementById('mapList');
+  const want = keep !== undefined ? keep : ml.value;
+  ml.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = maps.length ? '\u2014 open map \u2014' : '\u2014 no saved maps \u2014';
+  ml.appendChild(none);
+  for (const m of maps) {
+    const o = document.createElement('option');
+    o.value = m.id;
+    const when = m.modified ? new Date(m.modified) : null;
+    o.textContent = m.name + (when ? '  (' + when.toLocaleDateString() + ' ' +
+      when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ')' : '');
+    ml.appendChild(o);
+  }
+  if (want && maps.some((m) => m.id === want)) ml.value = want;
+}
+
+async function refreshMapList(keep) {
+  const st = await (await fetch('/api/state')).json();
+  fillMapList(st.maps, keep);
+}
+
+/*
+ * Keep the map and its undo history across a trip through the play page.
+ *
+ * Play opens in another tab and "back to editor" navigates that tab, so the
+ * original editor page is gone by the time you return -- with it, the whole
+ * in-memory history. localStorage rather than sessionStorage because those are
+ * two different tabs.
+ *
+ * Only the last SAVED_HISTORY snapshots are kept. The full stack is capped at
+ * 120, and a 300-object map serialises to tens of kilobytes, so persisting all
+ * of them would run at the browser storage limit for no real benefit.
+ */
+const SAVED_HISTORY = 30;
+const stateKey = () => 'johnny-editor:' + (map.meta.id || document.getElementById('mapName').value || 'untitled');
+
+function setGrid(v) {
+  grid = Number(v) || 0;
+  const el = document.getElementById('grid');
+  if (el) el.value = String(grid);
+}
+
+function persistState() {
+  try {
+    localStorage.setItem(stateKey(), JSON.stringify({
+      objects: map.objects,
+      nextId,
+      grid,
+      name: map.meta.name,
+      undo: undoStack.slice(-SAVED_HISTORY),
+      redo: redoStack.slice(-SAVED_HISTORY),
+      at: Date.now(),
+    }));
+  } catch (err) { /* quota or private mode: carry on without persistence */ }
+}
+
+function restoreState(id) {
+  try {
+    const raw = localStorage.getItem('johnny-editor:' + id);
+    if (!raw) return false;
+    const d = JSON.parse(raw);
+    if (!d || !Array.isArray(d.objects)) return false;
+    map.objects = d.objects;
+    nextId = d.nextId || 1;
+    if (d.name) map.meta.name = d.name;
+    // grid is a per-map working preference, not part of the map itself, so it
+    // lives with the session rather than in the saved file
+    if (typeof d.grid === 'number') setGrid(d.grid);
+    undoStack = d.undo || [];
+    redoStack = d.redo || [];
+    return true;
+  } catch (err) { return false; }
+}
+
+window.addEventListener('beforeunload', persistState);
+async function boot() {
+  const st = await (await fetch('/api/state')).json();
+  buildTools();
+  buildPalette(st.tiles);
+  const ml = document.getElementById('mapList');
+  fillMapList(st.maps);
+  // The list was built once at boot, so a map saved during the session never
+  // appeared in it until a reload. Refresh it when the dropdown is opened, and
+  // again after every save.
+  ml.addEventListener('mousedown', async () => {
+    try {
+      const cur = await (await fetch('/api/state')).json();
+      fillMapList(cur.maps, ml.value);
+    } catch (e) { /* keep whatever is listed if the refresh fails */ }
+  });
+  ml.onchange = async () => {
+    if (!ml.value) return;
+    const id = ml.value;
+    const g = await (await fetch('/api/map/' + id)).json();
+    loadGame(g);
+    // the persisted session is the most recent state of this map, including any
+    // edits made after the last save, its history, and its grid preference
+    map.meta.id = id;
+    restoreState(id);
+    document.getElementById('mapName').value = map.meta.name;
+    fitView(); refresh();
+  };
+  document.getElementById('newMap').onclick = () => {
+    map = blankMap(); sel = []; document.getElementById('mapName').value = 'Untitled';
+    fitView(); refresh();
+  };
+  document.getElementById('fromVanilla').onclick = async () => {
+    const g = await (await fetch('/api/vanilla')).json();
+    loadGame(g); map.meta.name = 'Copy of vanilla';
+    document.getElementById('mapName').value = map.meta.name;
+    fitView(); refresh();
+  };
+  document.getElementById('grid').onchange = (e) => { setGrid(Number(e.target.value)); schedulePersist(); };
+  document.getElementById('fit').onclick = fitView;
+  document.getElementById('artTop').onclick = (e) => {
+    artOnTop = !artOnTop;
+    e.target.classList.toggle('on', artOnTop);
+  };
+  document.getElementById('save').onclick = save;
+  // Play always saves first. The runner reads the map off disk, so running a
+  // stale copy of what is on screen would be worse than a moment of delay.
+  document.getElementById('play').onclick = async () => {
+    const btn = document.getElementById('play');
+    btn.textContent = 'saving\u2026';
+    const id = await save();
+    btn.textContent = 'play';
+    if (id) window.open('/play?map=' + encodeURIComponent(id), 'johnny-quickrun');
+  };
+  document.getElementById('mapName').oninput = (e) => { map.meta.name = e.target.value; };
+
+  // ?map=<id> opens straight into that map, which is how the quick-run page
+  // hands you back to what you were editing
+  const want = new URLSearchParams(location.search).get('map');
+  if (want) {
+    try {
+      const g = await (await fetch('/api/map/' + encodeURIComponent(want))).json();
+      if (!g.error) {
+        loadGame(g);
+        // A saved map on disk is the committed state; anything edited after that
+        // save, plus the history, comes back from local storage.
+        map.meta.id = want;
+        restoreState(want);
+        document.getElementById('mapName').value = map.meta.name;
+        ml.value = want;
+      }
+    } catch (err) { /* fall through to a blank map */ }
+  }
+
+  document.getElementById('mapName').value = map.meta.name;
+  fitView(); refresh();
+  requestAnimationFrame(draw);
+}
+
+async function save() {
+  const name = (document.getElementById('mapName').value || 'untitled').trim();
+  const id = name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64) || 'untitled';
+  const g = toGame();
+  g.meta = { id, name };
+  const btn = document.getElementById('save');
+  const r = await fetch('/api/map/' + id, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ map:g, thumb: thumbnail() }) });
+  const j = await r.json();
+  btn.textContent = j.ok ? 'saved' : 'save failed';
+  // the list is built once at boot, so without this a map saved during the
+  // session never appears in it until a reload
+  if (j.ok) { map.meta.id = id; await refreshMapList(id); }
+  setTimeout(()=>{ btn.textContent = 'save'; }, 1500);
+  return j.ok ? id : null;
+}
+
+boot().catch((e) => { document.getElementById('hud').textContent = 'error: ' + e.message; });
+</script>
+</body>
+</html>

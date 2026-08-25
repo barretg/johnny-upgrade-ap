@@ -1,0 +1,602 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Tile Aligner</title>
+<style>
+  :root {
+    --bg: #14161c; --panel: #1c1f28; --line: #2c3040; --text: #dde1ea;
+    --dim: #8b93a7; --accent: #6ea8fe; --good: #64d19a; --warn: #e8c46a; --bad: #e07a7a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.45 ui-sans-serif, system-ui, sans-serif;
+         display: grid; grid-template-columns: 280px 1fr; overflow: hidden; }
+
+  #side { background: var(--panel); border-right: 1px solid var(--line); display: flex;
+          flex-direction: column; min-height: 0; }
+  #side header { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  #side h1 { font-size: 14px; margin: 0 0 2px; letter-spacing: .01em; }
+  #side .sub { color: var(--dim); font-size: 11px; }
+
+  #list { overflow-y: auto; flex: 1; min-height: 0; }
+  .row { padding: 7px 14px; border-bottom: 1px solid #23273300; cursor: pointer;
+         display: flex; align-items: center; gap: 8px; }
+  .row:hover { background: #232733; }
+  .row.sel { background: #2b3346; box-shadow: inset 2px 0 0 var(--accent); }
+  .row .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #444b5e; flex: none; }
+  .dot.auto { background: var(--warn); }
+  .dot.ok { background: var(--good); }
+
+  #controls { border-top: 1px solid var(--line); padding: 12px 14px; display: grid; gap: 9px; }
+  label { display: grid; grid-template-columns: 58px 1fr 62px; gap: 8px; align-items: center;
+          color: var(--dim); font-size: 11px; }
+  input[type=range] { width: 100%; }
+  input[type=number] { background: #12141a; border: 1px solid var(--line); color: var(--text);
+                       border-radius: 5px; padding: 3px 6px; width: 100%; font: inherit; font-size: 11px; }
+  .btns { display: flex; gap: 7px; flex-wrap: wrap; }
+  button { background: #262b38; border: 1px solid var(--line); color: var(--text);
+           border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 11px; cursor: pointer; }
+  button:hover { background: #303748; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #0d1017; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+
+  #stage { position: relative; overflow: hidden; background: #0d0f14; cursor: grab; }
+  #stage.panning { cursor: grabbing; }
+  /* Scoped to the stage canvas on purpose. As a bare `canvas` rule it also caught
+     the preview canvases and tore them out of their panel to the top-left. */
+  #cv { position: absolute; top: 0; left: 0; transform-origin: 0 0; image-rendering: pixelated; }
+  #hud { position: absolute; left: 12px; bottom: 12px; background: #12141ad9; border: 1px solid var(--line);
+         border-radius: 7px; padding: 8px 11px; font-size: 11px; color: var(--dim);
+         display: grid; gap: 3px; pointer-events: none; backdrop-filter: blur(3px); }
+  #hud b { color: var(--text); font-weight: 600; }
+  #score { font-size: 13px; }
+  #help { position: absolute; right: 12px; top: 12px; background: #12141ad9; border: 1px solid var(--line);
+          border-radius: 7px; padding: 8px 11px; font-size: 11px; color: var(--dim); max-width: 250px;
+          backdrop-filter: blur(3px); }
+  kbd { background: #262b38; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px;
+        padding: 0 4px; font: inherit; font-size: 10px; color: var(--text); }
+
+  /* Side-by-side reference. In capture mode you are not overlaying anything, so
+     the only way to judge a selection is to see it next to the snip you are
+     trying to reproduce. Both panes letterbox their image at the same box size,
+     so shapes compare directly even though the two differ in scale. */
+  #preview { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 8px;
+             background: #12141ad9; border: 1px solid var(--line); border-radius: 7px;
+             padding: 9px; backdrop-filter: blur(3px); }
+  .pv { display: grid; gap: 5px; justify-items: center; }
+  .pv canvas { background: #0d0f14; border: 1px solid var(--line); border-radius: 4px;
+               image-rendering: pixelated; display: block; }
+  .pv span { color: var(--dim); font-size: 10px; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #0d1017; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div id="side">
+  <header>
+    <h1>Tile Aligner</h1>
+    <div class="sub">drag each cut onto the mural &middot; export exact rects</div>
+  </header>
+  <div id="list"></div>
+  <div id="controls">
+    <label>scale <input type="range" id="scale" min="0.2" max="8" step="0.005" value="1">
+      <input type="number" id="scaleN" step="0.005"></label>
+    <label>x <input type="range" id="px" min="0" max="5130" step="1" value="0">
+      <input type="number" id="pxN" step="1"></label>
+    <label>y <input type="range" id="py" min="0" max="3330" step="1" value="0">
+      <input type="number" id="pyN" step="1"></label>
+    <label>blend <input type="range" id="alpha" min="0" max="1" step="0.02" value="1">
+      <input type="number" id="alphaN" step="0.02"></label>
+    <div class="btns">
+      <button id="uimode">capture</button>
+      <button id="mode">mode: difference</button>
+      <button id="fit">fit</button>
+      <button id="mark">mark done</button>
+    </div>
+    <div class="btns">
+      <button id="save" class="primary">save provenance.json</button>
+    </div>
+  </div>
+</div>
+
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div id="help">
+    <div><kbd>m</kbd> capture / overlay mode</div>
+    <div><kbd>ctrl+drag</kbd> new box &middot; <kbd>drag</kbd> inside = move</div>
+    <div><kbd>corner</kbd> resize &middot; <kbd>drag</kbd> elsewhere = pan</div>
+    <div><kbd>wheel</kbd> zoom view &middot; <kbd>alt+wheel</kbd> scale tile</div>
+    <div><kbd>&larr;&uarr;&rarr;&darr;</kbd> nudge 1px &middot; <kbd>shift</kbd> 10px</div>
+    <div><kbd>[</kbd> <kbd>]</kbd> scale tile (overlay mode)</div>
+    <div><kbd>d</kbd> cycle blend &middot; <kbd>j</kbd>/<kbd>k</kbd> prev/next</div>
+    <div style="margin-top:5px">Capture: match the <b>reference</b> pane. Overlay: aligned goes <b>flat black</b>.</div>
+  </div>
+  <div id="hud">
+    <div id="hudName"><b>—</b></div>
+    <div id="hudRect">—</div>
+    <div id="score">match —</div>
+  </div>
+  <div id="preview">
+    <div class="pv"><canvas id="refCv" width="190" height="150"></canvas><span>reference snip</span></div>
+    <div class="pv"><canvas id="selCv" width="190" height="150"></canvas><span>your selection</span></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/*
+ * Manual alignment of hand-cut tiles onto the mural.
+ *
+ * The cuts are resampled Snipping Tool captures, so automated matching succeeds
+ * only where a tile carries enough structure. Uniform bars and thin strips have
+ * almost no gradient signal, and no correlation metric can place them. Doing it
+ * by eye is both reliable and quick, and the drag/scale/overlay interaction here
+ * is the same one the map editor needs, so this is a prototype of that too.
+ *
+ * Everything is stored in MURAL PIXEL space. world = mural - (1620, 720).
+ */
+
+const ART_X0 = 1620, ART_Y0 = 720;
+
+const stage = document.getElementById('stage');
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d', { willReadFrequently: true });
+
+let mural = null;                 // Image
+let tiles = [];                   // [{name, img, rect:{x,y,w,h}, scale, done}]
+let cur = -1;
+let view = { x: 0, y: 0, z: 0.25 };   // pan/zoom of the mural in the viewport
+let blend = 'difference';
+let alpha = 1;
+
+/*
+ * Two ways to work, because they suit different tiles.
+ *
+ * CAPTURE (default): draw the bounding box straight onto the mural at 1:1 and
+ *   judge it against the reference snip shown alongside. There is no scale to
+ *   fit, so nothing can be slightly-wrong-in-scale -- the rect IS the answer.
+ *   This is the faster path for almost everything.
+ *
+ * OVERLAY: drop the snip on top in difference blend and align it until the
+ *   overlap goes flat black. Slower, because it has to be scaled as well as
+ *   positioned, but it is the more precise check when a texture repeats and you
+ *   need to be sure which instance you are on.
+ */
+let uiMode = 'capture';   // 'capture' | 'overlay'
+
+const BLENDS = ['difference', 'normal', 'screen'];
+
+// ---------- loading ----------
+const loadImg = (src) => new Promise((res, rej) => {
+  const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error(src)); i.src = src;
+});
+
+async function boot() {
+  mural = await loadImg('/mural.png');
+  const st = await (await fetch('/api/state')).json();
+  const prov = new Map((st.provenance || []).map((p) => [p.name, p]));
+
+  tiles = await Promise.all(st.tiles.map(async (name) => {
+    const img = await loadImg('/cut/' + encodeURIComponent(name) + '.png');
+    const p = prov.get(name);
+    // seed from a previous automated pass where one exists, else drop it centre-screen
+    const rect = p ? { ...p.art } : { x: 2000, y: 1200, w: Math.round(img.width / 3), h: Math.round(img.height / 3) };
+    return { name, img, rect, ncc: p ? p.ncc : null, done: p ? !!p.confirmed : false };
+  }));
+
+  buildList();
+  setUiMode(uiMode);
+  select(0);
+  fitView();
+  requestAnimationFrame(draw);
+}
+
+// ---------- sidebar ----------
+function buildList() {
+  const list = document.getElementById('list');
+  list.innerHTML = '';
+  tiles.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'row' + (i === cur ? ' sel' : '');
+    const cls = t.done ? 'ok' : (t.ncc !== null && t.ncc >= 0.8 ? 'auto' : '');
+    row.innerHTML = '<span class="dot ' + cls + '"></span><span class="nm"></span>';
+    row.querySelector('.nm').textContent = t.name;
+    row.title = t.name + (t.ncc !== null ? '  (auto ncc ' + t.ncc.toFixed(2) + ')' : '');
+    row.onclick = () => select(i);
+    list.appendChild(row);
+  });
+}
+
+function select(i) {
+  if (i < 0 || i >= tiles.length) return;
+  cur = i;
+  buildList();
+  const r = tiles[i].rect;
+  document.getElementById('list').children[i]?.scrollIntoView({ block: 'nearest' });
+  syncInputs();
+  centreOn(r);
+  scheduleScore();
+}
+
+// ---------- transforms ----------
+const T = () => tiles[cur];
+const scaleOf = (t) => t.rect.w / t.img.width;
+const scaleYOf = (t) => t.rect.h / t.img.height;
+
+/*
+ * Resize handles.
+ *
+ * Sized in SCREEN pixels, not mural pixels, so they stay grabbable whether you
+ * are zoomed out over the whole 5130x3330 mural or in at 16x on one edge.
+ *
+ * Corners keep the cut's aspect ratio, which is what alignment wants -- a snip is
+ * scaled uniformly, so its aspect is already correct and only the size is in
+ * question. Hold shift on a corner, or drag an edge, to scale one axis freely.
+ */
+const HANDLE = 9;             // screen px
+const HANDLES = [
+  ['nw', 0, 0], ['n', 0.5, 0], ['ne', 1, 0],
+  ['w', 0, 0.5], ['e', 1, 0.5],
+  ['sw', 0, 1], ['s', 0.5, 1], ['se', 1, 1],
+];
+const CURSORS = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize',
+  n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize' };
+
+function handlePoints(t) {
+  return HANDLES.map(([id, fx, fy]) => ({
+    id, x: t.rect.x + t.rect.w * fx, y: t.rect.y + t.rect.h * fy,
+  }));
+}
+
+// which handle is under this screen point, if any
+function handleAt(sx, sy) {
+  const t = T(); if (!t) return null;
+  for (const p of handlePoints(t)) {
+    const hx = p.x * view.z + view.x, hy = p.y * view.z + view.y;
+    if (Math.abs(sx - hx) <= HANDLE / 2 + 2 && Math.abs(sy - hy) <= HANDLE / 2 + 2) return p.id;
+  }
+  return null;
+}
+
+// Resize so the dragged handle follows the pointer and the opposite side stays put.
+function resizeTo(t, id, mx, my, keepAspect) {
+  const r = t.rect;
+  const right = r.x + r.w, bottom = r.y + r.h;
+  let nx = r.x, ny = r.y, nw = r.w, nh = r.h;
+
+  if (id.includes('w')) { nx = Math.min(mx, right - 4); nw = right - nx; }
+  if (id.includes('e')) { nw = Math.max(4, mx - r.x); }
+  if (id.includes('n')) { ny = Math.min(my, bottom - 4); nh = bottom - ny; }
+  if (id.includes('s')) { nh = Math.max(4, my - r.y); }
+
+  const corner = id.length === 2;
+  if (keepAspect && corner) {
+    // follow the pointer on whichever axis moved further, then derive the other
+    const s = Math.max(nw / t.img.width, nh / t.img.height);
+    const aw = Math.max(4, Math.round(t.img.width * s));
+    const ah = Math.max(4, Math.round(t.img.height * s));
+    if (id.includes('w')) nx = right - aw;
+    if (id.includes('n')) ny = bottom - ah;
+    nw = aw; nh = ah;
+  }
+  r.x = Math.round(nx); r.y = Math.round(ny);
+  r.w = Math.max(4, Math.round(nw)); r.h = Math.max(4, Math.round(nh));
+  t.done = false;
+  syncInputs(); scheduleScore();
+}
+
+function setScale(s) {
+  const t = T(); if (!t) return;
+  s = Math.max(0.05, Math.min(12, s));
+  const cx = t.rect.x + t.rect.w / 2, cy = t.rect.y + t.rect.h / 2;
+  t.rect.w = Math.max(1, Math.round(t.img.width * s));
+  t.rect.h = Math.max(1, Math.round(t.img.height * s));
+  t.rect.x = Math.round(cx - t.rect.w / 2);
+  t.rect.y = Math.round(cy - t.rect.h / 2);
+  t.done = false;
+  syncInputs(); scheduleScore();
+}
+
+function move(dx, dy) {
+  const t = T(); if (!t) return;
+  t.rect.x += dx; t.rect.y += dy; t.done = false;
+  syncInputs(); scheduleScore();
+}
+
+// ---------- view ----------
+function fitView() {
+  const z = Math.min(stage.clientWidth / mural.width, stage.clientHeight / mural.height);
+  view = { z, x: (stage.clientWidth - mural.width * z) / 2, y: (stage.clientHeight - mural.height * z) / 2 };
+}
+function centreOn(r) {
+  const z = Math.max(view.z, 1.5);
+  view = { z, x: stage.clientWidth / 2 - (r.x + r.w / 2) * z, y: stage.clientHeight / 2 - (r.y + r.h / 2) * z };
+}
+const toMural = (sx, sy) => ({ x: (sx - view.x) / view.z, y: (sy - view.y) / view.z });
+
+// ---------- drawing ----------
+function draw() {
+  const W = stage.clientWidth, H = stage.clientHeight;
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#0d0f14';
+  ctx.fillRect(0, 0, W, H);
+  ctx.imageSmoothingEnabled = view.z < 1;
+  ctx.setTransform(view.z, 0, 0, view.z, view.x, view.y);
+  ctx.drawImage(mural, 0, 0);
+
+  const t = T();
+  if (t) {
+    if (uiMode === 'overlay') {
+      ctx.globalAlpha = alpha;
+      ctx.globalCompositeOperation = blend;
+      ctx.drawImage(t.img, t.rect.x, t.rect.y, t.rect.w, t.rect.h);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    } else {
+      // capture mode: dim everything outside the selection so the box reads clearly
+      ctx.save();
+      ctx.fillStyle = 'rgba(8,10,16,0.55)';
+      ctx.beginPath();
+      ctx.rect(0, 0, mural.width, mural.height);
+      ctx.rect(t.rect.x, t.rect.y, t.rect.w, t.rect.h);
+      ctx.fill('evenodd');
+      ctx.restore();
+    }
+    const col = t.done ? '#64d19a' : '#6ea8fe';
+    ctx.lineWidth = 1 / view.z;
+    ctx.strokeStyle = col;
+    ctx.strokeRect(t.rect.x - 0.5 / view.z, t.rect.y - 0.5 / view.z, t.rect.w + 1 / view.z, t.rect.h + 1 / view.z);
+
+    // handles, drawn at a constant size on screen regardless of zoom
+    const hs = HANDLE / view.z;
+    ctx.lineWidth = 1.5 / view.z;
+    for (const p of handlePoints(t)) {
+      ctx.fillStyle = (dragging && dragging.handle === p.id) ? col : '#0d0f14';
+      ctx.beginPath();
+      ctx.rect(p.x - hs / 2, p.y - hs / 2, hs, hs);
+      ctx.fill();
+      ctx.strokeStyle = col;
+      ctx.stroke();
+    }
+  }
+  requestAnimationFrame(draw);
+}
+
+// ---------- match score ----------
+// Grayscale NCC of the tile against the mural underneath it. Purely advisory --
+// it confirms a good alignment but cannot find one for a low-contrast tile.
+const off = document.createElement('canvas');
+const octx = off.getContext('2d', { willReadFrequently: true });
+let scoreTimer = null;
+const scheduleScore = () => { clearTimeout(scoreTimer); scoreTimer = setTimeout(computeScore, 120); };
+
+// Letterbox an image into a preview canvas, so reference and selection can be
+// compared by shape even though they differ in scale.
+function drawPreview(canvasId, src, sx, sy, sw, sh) {
+  const c = document.getElementById(canvasId);
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  if (!src || sw < 1 || sh < 1) return;
+  const f = Math.min((c.width - 6) / sw, (c.height - 6) / sh);
+  const dw = Math.max(1, Math.round(sw * f)), dh = Math.max(1, Math.round(sh * f));
+  g.imageSmoothingEnabled = f < 1;
+  g.drawImage(src, sx, sy, sw, sh, Math.round((c.width - dw) / 2), Math.round((c.height - dh) / 2), dw, dh);
+}
+
+function updatePreview() {
+  const t = T();
+  if (!t) { drawPreview('refCv', null); drawPreview('selCv', null); return; }
+  drawPreview('refCv', t.img, 0, 0, t.img.width, t.img.height);
+  drawPreview('selCv', mural, t.rect.x, t.rect.y, t.rect.w, t.rect.h);
+}
+
+function computeScore() {
+  updatePreview();
+  const t = T();
+  const el = document.getElementById('score');
+  document.getElementById('hudName').innerHTML = '<b>' + (t ? t.name : '—') + '</b>';
+  if (!t) { document.getElementById('hudRect').textContent = '—'; }
+  else {
+    const sx = scaleOf(t), sy = scaleYOf(t);
+    // show both only when a free resize has broken the cut's aspect ratio
+    const s = Math.abs(sx - sy) < 0.004 ? sx.toFixed(3) + '×'
+      : sx.toFixed(3) + '× / ' + sy.toFixed(3) + '× (aspect broken)';
+    document.getElementById('hudRect').textContent =
+      'mural ' + t.rect.x + ',' + t.rect.y + '  ' + t.rect.w + '×' + t.rect.h +
+      '   world ' + (t.rect.x - ART_X0) + ',' + (t.rect.y - ART_Y0) + '   scale ' + s;
+  }
+  if (!t) { el.textContent = 'match —'; return; }
+
+  const w = Math.min(t.rect.w, 400), h = Math.min(t.rect.h, 400);
+  if (w < 4 || h < 4) { el.textContent = 'match — (too small)'; return; }
+  off.width = w; off.height = h;
+
+  octx.clearRect(0, 0, w, h);
+  octx.drawImage(mural, t.rect.x, t.rect.y, t.rect.w, t.rect.h, 0, 0, w, h);
+  const A = octx.getImageData(0, 0, w, h).data;
+
+  octx.clearRect(0, 0, w, h);
+  octx.drawImage(t.img, 0, 0, w, h);
+  const B = octx.getImageData(0, 0, w, h).data;
+
+  let sa = 0, sb = 0, n = 0;
+  const ga = new Float64Array(w * h), gb = new Float64Array(w * h);
+  for (let i = 0, p = 0; i < w * h; i++, p += 4) {
+    if (B[p + 3] < 128) { ga[i] = gb[i] = NaN; continue; }
+    ga[i] = 0.299 * A[p] + 0.587 * A[p + 1] + 0.114 * A[p + 2];
+    gb[i] = 0.299 * B[p] + 0.587 * B[p + 1] + 0.114 * B[p + 2];
+    sa += ga[i]; sb += gb[i]; n++;
+  }
+  if (n < 16) { el.textContent = 'match —'; return; }
+  const ma = sa / n, mb = sb / n;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < w * h; i++) {
+    if (Number.isNaN(ga[i])) continue;
+    const a = ga[i] - ma, b = gb[i] - mb;
+    dot += a * b; na += a * a; nb += b * b;
+  }
+  const ncc = (na < 1e-6 || nb < 1e-6) ? null : dot / Math.sqrt(na * nb);
+  if (ncc === null) {
+    el.innerHTML = 'match <b style="color:var(--dim)">n/a</b> <span style="color:var(--dim)">(flat tile — align by eye)</span>';
+  } else {
+    const col = ncc > 0.9 ? 'var(--good)' : ncc > 0.75 ? 'var(--warn)' : 'var(--bad)';
+    el.innerHTML = 'match <b style="color:' + col + '">' + ncc.toFixed(3) + '</b>';
+  }
+}
+
+// ---------- inputs ----------
+function syncInputs() {
+  const t = T(); if (!t) return;
+  const set = (id, v) => { document.getElementById(id).value = v; document.getElementById(id + 'N').value = v; };
+  set('scale', scaleOf(t).toFixed(3));
+  set('px', t.rect.x);
+  set('py', t.rect.y);
+  document.getElementById('alpha').value = alpha;
+  document.getElementById('alphaN').value = alpha;
+}
+function bindPair(id, fn) {
+  const a = document.getElementById(id), b = document.getElementById(id + 'N');
+  const h = (e) => { const v = parseFloat(e.target.value); if (!Number.isNaN(v)) fn(v); };
+  a.oninput = h; b.oninput = h;
+}
+bindPair('scale', (v) => setScale(v));
+bindPair('px', (v) => { const t = T(); if (t) { t.rect.x = Math.round(v); t.done = false; syncInputs(); scheduleScore(); } });
+bindPair('py', (v) => { const t = T(); if (t) { t.rect.y = Math.round(v); t.done = false; syncInputs(); scheduleScore(); } });
+bindPair('alpha', (v) => { alpha = v; syncInputs(); });
+
+function setUiMode(m) {
+  uiMode = m;
+  const b = document.getElementById('uimode');
+  b.textContent = uiMode;
+  b.classList.toggle('on', uiMode === 'capture');
+  // the blend control only means anything when something is being overlaid
+  document.getElementById('mode').disabled = uiMode === 'capture';
+  scheduleScore();
+}
+document.getElementById('uimode').onclick = () => setUiMode(uiMode === 'capture' ? 'overlay' : 'capture');
+
+document.getElementById('mode').onclick = () => {
+  blend = BLENDS[(BLENDS.indexOf(blend) + 1) % BLENDS.length];
+  document.getElementById('mode').textContent = 'mode: ' + blend;
+};
+document.getElementById('fit').onclick = fitView;
+document.getElementById('mark').onclick = () => {
+  const t = T(); if (!t) return;
+  t.done = !t.done; buildList();
+};
+document.getElementById('save').onclick = async () => {
+  const payload = tiles.map((t) => ({
+    name: t.name,
+    scale: Number(scaleOf(t).toFixed(4)),
+    scaleY: Number(scaleYOf(t).toFixed(4)),
+    confirmed: !!t.done,
+    ncc: t.ncc,
+    art: { ...t.rect },
+    world: { x: t.rect.x - ART_X0, y: t.rect.y - ART_Y0, w: t.rect.w, h: t.rect.h },
+  }));
+  const r = await fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload) });
+  const j = await r.json();
+  const btn = document.getElementById('save');
+  btn.textContent = j.ok ? 'saved ' + j.count + ' rects' : 'save failed';
+  setTimeout(() => { btn.textContent = 'save provenance.json'; }, 1600);
+};
+
+// ---------- mouse ----------
+let dragging = null, spaceDown = false;
+stage.addEventListener('mousedown', (e) => {
+  const m = toMural(e.offsetX, e.offsetY);
+  const t = T();
+  const h = (spaceDown || e.button === 1) ? null : handleAt(e.offsetX, e.offsetY);
+  const inside = t && m.x >= t.rect.x && m.x <= t.rect.x + t.rect.w &&
+                      m.y >= t.rect.y && m.y <= t.rect.y + t.rect.h;
+  if (h) {
+    dragging = { handle: h };
+  } else if (uiMode === 'capture' && t && e.ctrlKey && !spaceDown && e.button === 0) {
+    // Drawing a fresh box requires ctrl. Without it an accidental drag on the
+    // mural would silently throw away a box already positioned, which is easy to
+    // do and annoying to undo -- so a bare drag outside the box pans instead.
+    dragging = { marquee: true, ox: m.x, oy: m.y };
+    t.rect.x = Math.round(m.x); t.rect.y = Math.round(m.y); t.rect.w = 1; t.rect.h = 1;
+    t.done = false;
+  } else if (spaceDown || e.button === 1 || !t || (uiMode === 'capture' && !inside)) {
+    dragging = { pan: true, sx: e.offsetX, sy: e.offsetY, vx: view.x, vy: view.y };
+    stage.classList.add('panning');
+  } else {
+    dragging = { pan: false, mx: m.x, my: m.y, rx: t.rect.x, ry: t.rect.y };
+  }
+});
+window.addEventListener('mousemove', (e) => {
+  if (!dragging) {
+    // hover feedback so the handles are discoverable
+    const h = handleAt(e.offsetX, e.offsetY);
+    stage.style.cursor = h ? CURSORS[h]
+      : (uiMode === 'capture' && e.ctrlKey) ? 'crosshair'
+      : spaceDown ? 'grab' : 'default';
+    return;
+  }
+  if (dragging.marquee) {
+    const m = toMural(e.offsetX, e.offsetY);
+    const t = T(); if (!t) return;
+    t.rect.x = Math.round(Math.min(dragging.ox, m.x));
+    t.rect.y = Math.round(Math.min(dragging.oy, m.y));
+    t.rect.w = Math.max(1, Math.round(Math.abs(m.x - dragging.ox)));
+    t.rect.h = Math.max(1, Math.round(Math.abs(m.y - dragging.oy)));
+    syncInputs(); scheduleScore();
+  } else if (dragging.handle) {
+    const m = toMural(e.offsetX, e.offsetY);
+    const t = T(); if (!t) return;
+    resizeTo(t, dragging.handle, m.x, m.y, uiMode === 'overlay' && !e.shiftKey);
+  } else if (dragging.pan) {
+    view.x = dragging.vx + (e.offsetX - dragging.sx);
+    view.y = dragging.vy + (e.offsetY - dragging.sy);
+  } else {
+    const m = toMural(e.offsetX, e.offsetY);
+    const t = T(); if (!t) return;
+    t.rect.x = Math.round(dragging.rx + (m.x - dragging.mx));
+    t.rect.y = Math.round(dragging.ry + (m.y - dragging.my));
+    t.done = false;
+    syncInputs(); scheduleScore();
+  }
+});
+window.addEventListener('mouseup', () => { dragging = null; stage.classList.remove('panning'); });
+
+stage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (e.altKey) { const t = T(); if (t) setScale(scaleOf(t) * (e.deltaY < 0 ? 1.02 : 1 / 1.02)); return; }
+  const before = toMural(e.offsetX, e.offsetY);
+  view.z = Math.max(0.05, Math.min(16, view.z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+  view.x = e.offsetX - before.x * view.z;
+  view.y = e.offsetY - before.y * view.z;
+}, { passive: false });
+
+// ---------- keyboard ----------
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.code === 'Space') { spaceDown = true; e.preventDefault(); return; }
+  const step = e.shiftKey ? 10 : 1;
+  const t = T();
+  if (e.key === 'ArrowLeft') { move(-step, 0); e.preventDefault(); }
+  else if (e.key === 'ArrowRight') { move(step, 0); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { move(0, -step); e.preventDefault(); }
+  else if (e.key === 'ArrowDown') { move(0, step); e.preventDefault(); }
+  else if (e.key === '[') { if (t) setScale(scaleOf(t) / (e.shiftKey ? 1.05 : 1.005)); }
+  else if (e.key === ']') { if (t) setScale(scaleOf(t) * (e.shiftKey ? 1.05 : 1.005)); }
+  else if (e.key === 'd') { document.getElementById('mode').click(); }
+  else if (e.key === 'm') { document.getElementById('uimode').click(); }
+  else if (e.key === 'Enter') { document.getElementById('mark').click(); }
+  else if (e.key === 'j') select(cur + 1);
+  else if (e.key === 'k') select(cur - 1);
+});
+window.addEventListener('keyup', (e) => { if (e.code === 'Space') spaceDown = false; });
+window.addEventListener('resize', () => { /* canvas resizes in draw() */ });
+
+boot().catch((e) => {
+  document.getElementById('hud').innerHTML = '<b style="color:#e07a7a">' + e.message + '</b>';
+});
+</script>
+</body>
+</html>
