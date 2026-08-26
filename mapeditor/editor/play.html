@@ -63,6 +63,8 @@
 <script src="/mapkit/mapformat.js"></script>
 <script src="/mapkit/crushers.js"></script>
 <script src="/mapkit/doors.js"></script>
+<script src="/mapkit/renderer.js"></script>
+<script src="/mapkit/patcher.js"></script>
 <script>
 'use strict';
 /*
@@ -127,46 +129,38 @@ function loadSdk() {
   })), Promise.resolve());
 }
 
-/*
- * Stubs for the Coolmath host page.
- *
- * The SDK expects two functions that live in cmg-ads.js on coolmathgames.com,
- * which we deliberately do not load. Without them the game throws every frame
- * once a level ends.
- *
- *   cmgGameEvent  telemetry, called from title, level, shop and gameOver
- *   cmgAdBreak    the ad break at level end. addBreak() hides the sprite layer,
- *                 mutes, calls it, and waits for an "adBreakComplete" event to
- *                 unhide and continue -- so a stub that never fires that event
- *                 leaves the game frozen on a blank screen.
- *
- * The caller sets levl = -1 first, which sends us to the shop. With quick restart
- * on we override that and go straight back into the level, since the debug panel
- * already does what the shop is for. Turn it off to exercise the real flow.
- */
-function stubHostPage() {
-  window.cmgGameEvent = function () {};
-  window.cmgAdBreak = function () {
-    const quick = document.getElementById('quickRestart');
-    if (!quick || quick.checked) { try { levl = 1; } catch (e) {} }
-    document.dispatchEvent(new Event('adBreakComplete'));
-  };
-}
-
 function patchAndStart() {
-  stubHostPage();
+  /*
+   * Everything the game needs unpinning is in mapkit, which is what actually
+   * ships. Quick-run deliberately uses the same modules rather than its own
+   * copies, so a bug found here is a bug in the shipped runtime.
+   */
+  const host = MapkitPatcher.install(window, {
+    onAdBreak: () => {
+      const quick = document.getElementById('quickRestart');
+      if (!quick || quick.checked) { try { levl = 1; } catch (e) {} }
+    },
+  });
 
-  // 1. defeat the host check by whitelisting wherever we are actually served from
-  try { arr.push(location.hostname.split('.').splice(-2).join('.')); } catch (e) {}
+  /*
+   * Where a real ad break exists it has to run, so the skip-the-shop shortcut is
+   * withdrawn rather than silently doing nothing. Quick-run is served from
+   * localhost today, so this is a guard rather than a live case.
+   */
+  if (host && host.realAdBreak) {
+    const q = document.getElementById('quickRestart');
+    if (q) { q.checked = false; q.disabled = true;
+      q.parentElement.lastElementChild.textContent = 'quick restart (unavailable: ad break must run)'; }
+  }
 
-  // 2. the map itself. Saved files are already in the game's own shape.
+  // the map itself. Saved files are already in the game's own shape.
   maps[1] = mapData;
 
   // 3. preload the map's textures alongside the game's own assets
   const origPreload = LoaderState.preload;
   LoaderState.preload = function () {
     origPreload.call(this);
-    for (const name of tileNames) game.load.image('tile_' + name, '/tile/' + encodeURIComponent(name) + '.png');
+    MapkitRenderer.preload(window, mapData, (n) => '/tile/' + encodeURIComponent(n) + '.png');
   };
 
   // 4. skip the splash and the title screen
@@ -182,12 +176,9 @@ function patchAndStart() {
   const origMainCreate = MainState.create;
   MainState.create = function () { origMainCreate.call(this); game.splashCT = 1; };
 
-  patchLevelArt();
-  // Replace the stock single-crusher routine with the configurable one. Must
-  // come after patchLevelArt, since both wrap iniLevel and the innermost wrap
-  // has to be the original.
-  Crushers.install(window);
-  Doors.install(window);
+  // Crushers and doors are installed by MapkitPatcher.install above. Installing
+  // them again here would wrap iniLevel a second time and build every door
+  // twice, leaving two sprites per door with only one of them being driven.
 
   const game_ = new Phaser.Game(screenWidth, screenHeight, Phaser.CANVAS, 'game');
   window.game = game_;
@@ -198,70 +189,6 @@ function patchAndStart() {
   game_.state.add('Shop', ShopState);
   game_.state.add('GameOver', GameOverState);
   game_.state.start('Main');
-}
-
-/*
- * Draw the map's own art instead of the vanilla mural.
- *
- * iniLevel() creates lvlGrfx1..6 at fixed offsets and builds platforms as bare
- * collision rects with no sprite at all -- in vanilla the mural is the only thing
- * that makes a platform visible. A custom map has no mural, so platforms are
- * filled flat black and pushed to the very back, and the art layer is drawn over
- * them in z order.
- */
-function patchLevelArt() {
-  const origIni = iniLevel;
-  window.iniLevel = function () {
-    origIni.apply(this, arguments);
-
-    // hide the vanilla background art
-    isprt.children.slice().forEach((c) => {
-      if (c.key && /^lvlGrfx/.test(c.key)) c.visible = false;
-    });
-
-    /*
-     * Give the camera a starting frame.
-     *
-     * LevelState.create sets sprt.area = {} and only areaCode() ever fills it,
-     * which needs Johnny to be standing inside a camera area on frame one. In
-     * the vanilla map he always is. Move the spawn outside every area and
-     * centerX/centerY stay undefined, so scrollCode computes
-     *   camera.x += (sprt.x - undefined - camera.x + ...) / smoothness
-     * which is NaN -- and a NaN camera transform is what piles the whole level
-     * into the corner of the screen.
-     *
-     * Defaults roughly match vanilla area 0 (xx 320, yy 400, scaled by 1.25).
-     * A real area still overrides them the moment Johnny enters one.
-     */
-    sprt.area = Object.assign({
-      centerX: 400, centerY: 500, xmin: 0, xmax: 0, ymin: 0, ymax: 0,
-    }, sprt.area || {});
-
-    const ldat = maps[levl];
-
-    // flat black platform bodies, furthest back
-    const g = game.add.graphics(0, 0);
-    g.beginFill(0x000000, 1);
-    for (const p of ldat.plats || []) g.drawRect(p.x, p.y, p.w, p.h);
-    g.endFill();
-    isprt.add(g);
-    isprt.sendToBack(g);
-
-    // the art layer, in z order
-    const art = (ldat.art || []).slice().sort((a, b) => (a.z || 0) - (b.z || 0));
-    for (const a of art) {
-      if (!a.tile || !game.cache.checkImageKey('tile_' + a.tile)) continue;
-      const s = isprt.create(a.x + a.w / 2, a.y + a.h / 2, 'tile_' + a.tile);
-      s.anchor.setTo(0.5);
-      s.width = a.w; s.height = a.h;
-      if (a.rot) s.angle = a.rot;
-      if (a.flipX) s.scale.x *= -1;
-      if (a.flipY) s.scale.y *= -1;
-      s.autoCull = true;
-    }
-  };
-  // level.js calls iniLevel by name from LevelState.create, so the global has to
-  // be the patched one -- which it now is.
 }
 
 // ------------------------------------------------------------------ upgrades

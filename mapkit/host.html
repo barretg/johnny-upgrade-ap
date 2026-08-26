@@ -1,0 +1,245 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!--
+  The SDK asks for its scripts and assets with RELATIVE paths, so the base has to
+  point at wherever they are mounted rather than at this page.
+-->
+<base href="/play/">
+<title>Johnny Upgrade — Custom Levels</title>
+<style>
+  html,body { height:100%; margin:0; background:#0d0f14; }
+  #game { height:100%; display:grid; place-items:center; }
+  #game canvas { max-width:100%; max-height:100vh; }
+</style>
+</head>
+<body>
+
+<div id="game"></div>
+
+<script src="/mapkit/api.js"></script>
+<script src="/mapkit/mapformat.js"></script>
+<script src="/mapkit/crushers.js"></script>
+<script src="/mapkit/doors.js"></script>
+<script src="/mapkit/renderer.js"></script>
+<script src="/mapkit/patcher.js"></script>
+<script src="/mapkit/saves.js"></script>
+<script src="/mapkit/settings.js"></script>
+<script src="/mapkit/select.js"></script>
+<script>
+'use strict';
+/*
+ * Standalone host for custom levels.
+ *
+ * The game boots straight into the level selector instead of its title screen,
+ * you pick a level, play it, and leaving takes you back to the selector.
+ *
+ * This is the shape the Archipelago client will use too. The only differences
+ * there are where the maps come from and who answers the lock question -- both
+ * of which are injected, so none of this file has to change:
+ *
+ *   Mapkit.addMap(...)              AP adds the maps in its slot data
+ *   Mapkit.setLockProvider(fn)      AP answers from received items
+ *   Mapkit.on('levelComplete', fn)  AP sends the check
+ *
+ * Imported levels live in localStorage, so they survive a reload without
+ * needing a server. That is the only part of this the AP build would drop.
+ */
+
+const STORE = 'mapkit-imported';
+
+// ------------------------------------------------------------- map sources
+function loadImported() {
+  try {
+    const raw = localStorage.getItem(STORE);
+    if (!raw) return [];
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list : [];
+  } catch (e) { return []; }
+}
+function saveImported(list) {
+  try { localStorage.setItem(STORE, JSON.stringify(list)); }
+  catch (e) { alert('Could not save imported levels: ' + e.message); }
+}
+
+async function loadBuiltins() {
+  // the dev server exposes whatever the editor has saved; a shipped build would
+  // bundle these instead
+  try {
+    const st = await (await fetch('/api/state')).json();
+    for (const m of st.maps || []) {
+      const data = await (await fetch('/api/map/' + encodeURIComponent(m.id))).json();
+      if (data && data.plats) {
+        Mapkit.addMap({
+          id: m.id, name: m.name, data,
+          thumb: m.thumb ? '/thumb/' + encodeURIComponent(m.id) + '.png' : null,
+          source: 'builtin',
+        });
+      }
+    }
+  } catch (e) { console.warn('[host] no builtin maps available', e); }
+}
+
+function registerImported() {
+  for (const m of loadImported()) {
+    Mapkit.addMap({ id: m.id, name: m.name, data: m.data, thumb: m.thumb || null, source: 'imported' });
+  }
+}
+
+// ------------------------------------------------------------- boot
+function loadSdk() {
+  const files = ['js/phaser.js', 'js/loader.js', 'js/title.js', 'js/level.js',
+                 'js/shop.js', 'js/boss.js', 'js/gameOver.js', 'js/main.js'];
+  return files.reduce((chain, f) => chain.then(() => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = f; s.onload = res; s.onerror = () => rej(new Error('failed to load ' + f));
+    document.head.appendChild(s);
+  })), Promise.resolve());
+}
+
+let pending = null;   // the map waiting to be started
+/*
+ * Declared out here because startLevel() and the adBreakComplete listener are
+ * top-level and boot() only assigns them.
+ *
+ * Prefixed, because this page shares a global scope with the game: main.js
+ * already declares 'function settings', and a bare 'let settings' beside it is a
+ * redeclaration error that kills the whole script before it runs.
+ */
+let mkSettings = null;
+let mkSaves = null;
+
+async function boot() {
+  registerImported();
+  await loadBuiltins();
+  await loadSdk();
+
+  /*
+   * The original level, captured from the game before anything overwrites
+   * maps[1]. Nothing is shipped for it -- the data is already in the page, and
+   * it has no art layer, so the renderer leaves its painted background alone.
+   */
+  Mapkit.addMap({
+    id: 'original',
+    name: 'Original Level',
+    data: JSON.parse(JSON.stringify(maps[1])),
+    source: 'original',
+  });
+
+  MapkitPatcher.install(window, {});
+
+  // audio + save controls, and restore whatever was muted last session
+  mkSettings = MapkitSettings.make(window);
+
+  /*
+   * Per-level saves. Each map gets its own upgrades, cash and stats, so
+   * progress in one level never leaks into another and a single level can be
+   * restarted clean without wiping the rest.
+   */
+  mkSaves = MapkitSaves.make(window);
+  mkSaves.install();
+
+  /*
+   * Take over the title screen. newState() routes to Title whenever levl is 0,
+   * which is where "back to main menu" ends up, so replacing its create() is
+   * enough to make the selector the game's front door.
+   */
+  MapkitSelect.install(window, {
+    mapkit: Mapkit,
+    title: 'Johnny Upgrade — Custom Levels',
+    settings: Object.assign({}, mkSettings, {
+      // "reset save data" in the menu means every level, since per-level
+      // resets already live on the cards
+      resetSave: () => { mkSettings.resetSave(); mkSaves.resetAll(); },
+    }),
+    onPick: startLevel,
+    onResetLevel: (id) => mkSaves.reset(id),
+    hasProgress: (id) => mkSaves.has(id),
+    onImport: async (entries) => {
+      const list = loadImported();
+      for (const e of entries) {
+        const i = list.findIndex((x) => x.id === e.id);
+        const rec = { id: e.id, name: e.name, data: e.data, thumb: null };
+        if (i >= 0) list[i] = rec; else list.push(rec);
+        Mapkit.addMap({ ...rec, source: 'imported' });
+      }
+      saveImported(list);
+    },
+    onDelete: (id) => {
+      saveImported(loadImported().filter((m) => m.id !== id));
+      Mapkit.removeMap(id);
+    },
+  });
+
+  // skip the splash; the selector is the front door
+  const origMainCreate = MainState.create;
+  MainState.create = function () { origMainCreate.call(this); game.splashCT = 1; };
+
+  const origLoaderCreate = LoaderState.create;
+  LoaderState.create = function () {
+    origLoaderCreate.call(this);
+    if (game.btnPlay) game.btnPlay.destroy();
+    // the game object exists by now, so stored mute preferences can be applied
+    mkSettings.apply();
+    levl = 0;          // Title -> our selector
+    newState();
+  };
+
+  const g = new Phaser.Game(screenWidth, screenHeight, Phaser.CANVAS, 'game');
+  window.game = g;
+  g.state.add('Main', MainState);
+  g.state.add('Loader', LoaderState);
+  g.state.add('Title', TitleState);
+  g.state.add('Level', LevelState);
+  g.state.add('Shop', ShopState);
+  g.state.add('GameOver', GameOverState);
+  g.state.start('Main');
+}
+
+/*
+ * Start a level.
+ *
+ * Its textures are almost certainly not in the cache yet -- the preloader ran
+ * long before this level was chosen -- so they are fetched on demand and the
+ * level only starts once they land. Without the wait the first frame draws with
+ * missing textures.
+ */
+function startLevel(entry) {
+  pending = entry;
+  maps[1] = entry.data;
+  mkSaves.use(entry.id);   // this level's upgrades, not whatever was played last
+  Mapkit.emit('levelStart', { id: entry.id, name: entry.name });
+
+  const names = MapkitRenderer.preload(window, entry.data,
+    (n) => '/tile/' + encodeURIComponent(n) + '.png');
+
+  const go = () => { levl = 1; newState(); };
+  if (!names.length || game.load.totalQueuedFiles() === 0) return go();
+  game.load.onLoadComplete.addOnce(go);
+  game.load.start();
+}
+
+/*
+ * Level over -- by death or by finishing -- goes to the SHOP, which is the
+ * game's own flow: destroySprite() sets world.doneCT, render() turns that into
+ * levl = -1 and calls addBreak(). Forcing levl = 0 here skipped the shop
+ * entirely, which is most of the game loop.
+ *
+ * From the shop, its own buttons lead out: home sets levl = 0, which lands on
+ * TitleState and therefore on the level select; play sets levl = 1 and replays
+ * the same level. Neither needs help from us.
+ *
+ * The only thing to do here is report completion.
+ */
+document.addEventListener('adBreakComplete', () => {
+  if (pending) Mapkit.emit('levelComplete', { id: pending.id, name: pending.name });
+});
+
+boot().catch((e) => {
+  document.body.innerHTML =
+    '<pre style="color:#e07a7a;padding:20px;font:13px ui-monospace,monospace">' + e.message + '</pre>';
+});
+</script>
+</body>
+</html>

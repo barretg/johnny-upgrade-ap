@@ -40,6 +40,17 @@
     const ldat = win.maps[win.levl];
     if (!ldat) return;
 
+    /*
+     * A map with no art layer is the ORIGINAL level, and the mural is its art.
+     *
+     * Hiding the mural and filling platforms black is right for a custom map,
+     * which has its own textures and would otherwise show the old level's
+     * scenery behind them. Doing it to the stock level strips the only thing
+     * that makes it look like anything.
+     */
+    const hasArt = Array.isArray(ldat.art) && ldat.art.length > 0;
+    if (!hasArt) return null;
+
     // 1. hide the vanilla mural
     win.isprt.children.slice().forEach((c) => {
       if (c.key && /^lvlGrfx/.test(c.key)) c.visible = false;

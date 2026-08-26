@@ -17,10 +17,28 @@ const fs = require('fs');
 const path = require('path');
 
 const argv = process.argv.slice(2);
-const arg = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
-const PORT = Number(arg('--port', 7732));
+/*
+ * Flags win over environment, environment over defaults. Containers pass
+ * settings as env vars far more naturally than as argv, and a Portainer stack
+ * is nothing but a list of environment variables.
+ */
+const arg = (k, envKey, d) => {
+  const i = argv.indexOf(k);
+  if (i >= 0) return argv[i + 1];
+  if (envKey && process.env[envKey] !== undefined && process.env[envKey] !== '') return process.env[envKey];
+  return d;
+};
+const PORT = Number(arg('--port', 'JU_PORT', 7732));
+/*
+ * Bind address. Localhost by default -- the editor writes files and has no
+ * concept of users, so it should not be reachable from anywhere else unless
+ * that is asked for deliberately. Pass --host 0.0.0.0 to share it on a private
+ * network, and --token to put a shared secret in front of it.
+ */
+const HOST = arg('--host', 'JU_HOST', '127.0.0.1');
+const TOKEN = arg('--token', 'JU_TOKEN', null);
 const ROOT = path.join(__dirname, '..');
-const SDK = arg('--sdk', path.join(ROOT, '..', 'scratch-work', 'johnny-upgrade-sdk'));
+const SDK = arg('--sdk', 'JU_SDK', path.join(ROOT, '..', 'scratch-work', 'johnny-upgrade-sdk'));
 const TILES = path.join(ROOT, 'tiles', 'extracted');
 const MAPS = path.join(ROOT, 'maps');
 
@@ -66,9 +84,36 @@ function vanilla() {
   return require(p)[1];
 }
 
+/*
+ * Shared-secret gate, for when this is hosted somewhere other than localhost.
+ *
+ * Deliberately simple: one token, passed as ?token= once and then kept in a
+ * cookie. This is a lock on a door for a group of friends, not authentication --
+ * anyone with the token can edit and overwrite every map. Do not put it on the
+ * public internet.
+ */
+function authorised(req, res, url) {
+  if (!TOKEN) return true;
+  const given = url.searchParams.get('token');
+  if (given === TOKEN) {
+    res.setHeader('Set-Cookie', 'mapedit=' + encodeURIComponent(TOKEN) + '; Path=/; SameSite=Lax; Max-Age=2592000');
+    return true;
+  }
+  const cookie = (req.headers.cookie || '').split(';')
+    .map((c) => c.trim().split('='))
+    .find((c) => c[0] === 'mapedit');
+  return !!cookie && decodeURIComponent(cookie[1] || '') === TOKEN;
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = decodeURIComponent(url.pathname);
+
+  if (!authorised(req, res, url)) {
+    return send(res, 401, 'text/html; charset=utf-8',
+      '<body style="background:#0d0f14;color:#dde1ea;font:14px system-ui;padding:40px">' +
+      '<h2>Map editor</h2><p>Append <code>?token=…</code> to the URL to get in.</p></body>');
+  }
 
   try {
     if (req.method === 'POST' && p.startsWith('/api/map/')) {
@@ -114,6 +159,12 @@ const server = http.createServer(async (req, res) => {
      * paths ("assets/pics/...") and they have to resolve from wherever the page
      * lives.
      */
+    // standalone game host: level select, then play whatever is picked
+    if (p === '/game' || p === '/game/') {
+      return send(res, 200, 'text/html; charset=utf-8',
+        fs.readFileSync(path.join(ROOT, '..', 'mapkit', 'host.html')));
+    }
+
     if (p === '/play' || p === '/play/' || p === '/play/index.html') {
       return send(res, 200, 'text/html; charset=utf-8', fs.readFileSync(path.join(__dirname, 'play.html')));
     }
@@ -157,9 +208,51 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log('map editor on http://127.0.0.1:' + PORT + '/');
-  console.log('  tiles: ' + TILES);
-  console.log('  maps:  ' + MAPS);
-  console.log('  sdk:   ' + SDK);
+/*
+ * Startup checks.
+ *
+ * Both of these fail in ways that look like editor bugs rather than missing
+ * setup -- an empty texture palette, or a quick-run that 404s on phaser.js -- so
+ * they are worth saying out loud at boot.
+ */
+function preflight() {
+  const problems = [];
+  if (!fs.existsSync(path.join(SDK, 'js', 'phaser.js'))) {
+    problems.push('No game SDK at ' + SDK +
+      '\n      Quick-run and the level select need it. Pass --sdk <path>.');
+  }
+  if (!fs.existsSync(path.join(TILES, 'manifest.json'))) {
+    problems.push('No extracted tiles at ' + TILES +
+      '\n      The texture palette will be empty. Build them with:' +
+      '\n        node tools/extract-from-mural.js' +
+      '\n        node tools/reconstruct-grass.js');
+  }
+  return problems;
+}
+
+server.listen(PORT, HOST, () => {
+  const shown = HOST === '0.0.0.0' ? 'localhost' : HOST;
+  console.log('map editor on http://' + shown + ':' + PORT + '/' + (TOKEN ? '?token=' + TOKEN : ''));
+  console.log('  editor     /');
+  console.log('  level list /game');
+  console.log('  tiles:     ' + TILES);
+  console.log('  maps:      ' + MAPS);
+  console.log('  sdk:       ' + SDK);
+
+  if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
+    console.log('');
+    if (TOKEN) {
+      console.log('  reachable from the network, behind a shared token.');
+    } else {
+      console.log('  WARNING: reachable from the network with NO token.');
+      console.log('  Anyone who can reach this port can read, edit and overwrite every map.');
+      console.log('  Pass --token <secret> unless the network is genuinely trusted.');
+    }
+  }
+
+  const problems = preflight();
+  if (problems.length) {
+    console.log('');
+    for (const p of problems) console.log('  ! ' + p);
+  }
 });

@@ -48,11 +48,16 @@
     text-overflow:ellipsis; white-space:nowrap; }
   #mk-select .mk-tag { color:#8b93a7; font-size:10px; margin-top:2px; }
   #mk-select .mk-tag.mk-why { color:#e8c46a; }
+  #mk-select .mk-settings { margin:-6px 0 16px; padding-top:12px;
+    border-top:1px solid #22262f; }
+  #mk-select .mk-danger { border-color:#4a2b2b; color:#e0a0a0; }
+  #mk-select .mk-danger:hover:not(:disabled) { background:#3a2427; color:#f0c0c0; }
   #mk-select .mk-empty { color:#8b93a7; text-align:center; padding:60px 20px; }
   #mk-select .mk-pager { display:flex; gap:8px; align-items:center; justify-content:center;
     margin-top:20px; color:#8b93a7; font-size:12px; }
   #mk-select .mk-del { float:right; color:#8b93a7; font-size:11px; padding:0 4px; }
   #mk-select .mk-del:hover { color:#e07a7a; }
+  #mk-select .mk-reset:hover { color:#e8c46a; }
   `;
 
   let host = null;
@@ -106,6 +111,38 @@
     }
     wrap.appendChild(bar);
 
+    /*
+     * Audio and save controls.
+     *
+     * The stock game only offers these from inside a level or from its title
+     * screen, and mapkit replaces the title. Without them here, a player who
+     * never sees the stock title cannot mute anything or clear their save.
+     */
+    if (cfg.settings) {
+      const row = el("div", "mk-bar mk-settings");
+      const mkToggle = (label, isOn, toggle) => {
+        const b = el("button");
+        const paint = () => { b.textContent = label + ": " + (isOn() ? "off" : "on"); };
+        b.onclick = () => { toggle(); paint(); };
+        paint();
+        return b;
+      };
+      row.appendChild(mkToggle("Music", () => cfg.settings.musicMuted(), () => cfg.settings.toggleMusic()));
+      row.appendChild(mkToggle("Sound", () => cfg.settings.sfxMuted(), () => cfg.settings.toggleSfx()));
+      row.appendChild(el("span", "mk-sp"));
+      const reset = el("button", "mk-danger", "Reset save data");
+      reset.onclick = () => {
+        // upgrades, cash and stats are the whole of a run, so this is worth a
+        // confirmation rather than a single misclick
+        if (!confirm("Erase progress for EVERY level?\n\nUse the ↺ on a level to reset just that one.\nThis cannot be undone.")) return;
+        cfg.settings.resetSave();
+        reset.textContent = "Save cleared";
+        setTimeout(() => { reset.textContent = "Reset save data"; }, 1600);
+      };
+      row.appendChild(reset);
+      wrap.appendChild(row);
+    }
+
     if (!maps.length) {
       wrap.appendChild(el('div', 'mk-empty',
         cfg.allowImport === false ? 'Nothing here yet.'
@@ -142,6 +179,22 @@
 
     const meta = el('div', 'mk-meta');
     const name = el('div', 'mk-name', m.name);
+    /*
+     * Per-level controls sit on the card rather than in a menu, because both
+     * only ever apply to one level and 'which level does this affect' is
+     * exactly the thing that goes wrong when they are elsewhere.
+     */
+    if (cfg.onResetLevel) {
+      const rst = el('span', 'mk-del mk-reset', '↺');
+      rst.title = 'Reset progress for this level only';
+      rst.onclick = (e) => {
+        e.stopPropagation();
+        if (!confirm('Reset progress for "' + m.name + '"?\n\nOther levels keep theirs.')) return;
+        cfg.onResetLevel(m.id);
+        render();
+      };
+      name.appendChild(rst);
+    }
     if (m.source === 'imported' && cfg.onDelete) {
       const del = el('span', 'mk-del', '✕');
       del.title = 'Remove this imported level';
@@ -153,7 +206,8 @@
     // A locked level should say WHY, not just refuse. Under Archipelago that is
     // usually "you have not received the item yet".
     const reason = locked && cfg.lockReason ? cfg.lockReason(m.id) : null;
-    meta.appendChild(el('div', 'mk-tag' + (reason ? ' mk-why' : ''), reason || m.source));
+    const played = cfg.hasProgress && cfg.hasProgress(m.id) ? 'in progress' : m.source;
+    meta.appendChild(el('div', 'mk-tag' + (reason ? ' mk-why' : ''), reason || played));
     c.appendChild(meta);
 
     if (!locked) c.onclick = () => { hide(); cfg.onPick(m); };
@@ -201,11 +255,31 @@
 
     cfg.mapkit.on('mapsChanged', () => { if (host && host.style.display !== 'none') render(); });
 
+    /*
+     * Take over the title screen.
+     *
+     * All three hooks, not just create(). Phaser keeps calling update() and
+     * render() on the active state, and TitleState.update dereferences a `title`
+     * global that only create() builds -- so skipping create alone throws
+     * "can't access property c1, title is undefined" every frame behind the
+     * overlay. When we replace the screen we have to silence the whole state.
+     */
     if (win.TitleState) {
-      const orig = win.TitleState.create;
+      const orig = {
+        create: win.TitleState.create,
+        update: win.TitleState.update,
+        render: win.TitleState.render,
+      };
+      const replacing = () => cfg.replaceTitle !== false;
       win.TitleState.create = function () {
-        if (cfg.replaceTitle === false) orig.apply(this, arguments);
+        if (!replacing()) orig.create && orig.create.apply(this, arguments);
         show();
+      };
+      win.TitleState.update = function () {
+        if (!replacing()) orig.update && orig.update.apply(this, arguments);
+      };
+      win.TitleState.render = function () {
+        if (!replacing()) orig.render && orig.render.apply(this, arguments);
       };
     }
     return { show, hide, render };

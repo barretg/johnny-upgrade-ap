@@ -26,19 +26,39 @@
   'use strict';
 
   /*
-   * The host page on coolmathgames.com provides these. Without them the game
-   * throws every frame once a level ends, or freezes on a blank screen.
+   * Host-page functions: cmgGameEvent and cmgAdBreak.
+   *
+   * IMPORTANT -- on coolmathgames.com these are REAL and must be left alone.
+   * cmgAdBreak runs the ad that pays for the game being there; suppressing it,
+   * wrapping it so it can be skipped, or faking its completion event would be
+   * both a licence problem and simple theft from the host. So:
+   *
+   *   - if the page already defines them, we do not touch them, at all
+   *   - our stand-ins are installed ONLY when they are genuinely absent, which
+   *     means a local dev host or an offline build where no ad exists to run
+   *   - the caller's onAdBreak hook (quick-run uses it to skip the shop) lives
+   *     inside the stub, so it cannot run on a page with a real ad break
+   *
+   * The stub has to dispatch adBreakComplete itself because addBreak() hides the
+   * sprite layer and mutes before calling out, then waits for that event to put
+   * both back. Without it the game sits on a black screen forever. The real
+   * implementation fires the same event when the ad finishes.
    */
   function stubHost(win, opts) {
-    if (!win.cmgGameEvent) win.cmgGameEvent = function () {};
-    if (!win.cmgAdBreak) {
+    const realAdBreak = typeof win.cmgAdBreak === 'function';
+    const realEvent = typeof win.cmgGameEvent === 'function';
+
+    if (!realEvent) win.cmgGameEvent = function () {};
+    if (!realAdBreak) {
       win.cmgAdBreak = function () {
         if (opts && opts.onAdBreak) opts.onAdBreak();
-        // addBreak() hides the sprite layer and mutes, then waits for this event
-        // to put both back. A stub that never fires it leaves a black screen.
         win.document.dispatchEvent(new Event('adBreakComplete'));
       };
+    } else if (opts && opts.onAdBreak) {
+      console.info('[mapkit] real cmgAdBreak present; ignoring onAdBreak hook so the ad runs as intended');
     }
+
+    return { realAdBreak, realEvent };
   }
 
   // loader.js checks the last two labels of the hostname against a whitelist
@@ -108,13 +128,16 @@
    */
   function install(win, opts) {
     opts = opts || {};
-    stubHost(win, opts);
+    const host = stubHost(win, opts);
     allowHost(win);
     guardCamera(win);
     freeLasers(win);
     if (win.Crushers) win.Crushers.install(win);
     if (win.Doors) win.Doors.install(win);
     if (win.MapkitRenderer) win.MapkitRenderer.install(win);
+    // hosts can branch on this -- e.g. do not offer "skip the shop" where a real
+    // ad break has to run between levels
+    return host;
   }
 
   return { install, stubHost, allowHost, guardCamera, freeLasers };
