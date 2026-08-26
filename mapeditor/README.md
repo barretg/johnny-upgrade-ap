@@ -19,7 +19,7 @@ arrays, and `iniLevel()` is the only thing that reads it:
 | `coins`    | 246 | points                                                        |
 | `spikes`   | 8   | rects                                                         |
 | `bombs`    | 3   | drifting sine-wave hazards                                    |
-| `lasers`   | 4   | timed beams (index 0 is force-rotated horizontal, see below)  |
+| `lasers`   | 4   | timed beams; length + orientation are map data (see below)    |
 | `enes`     | 8   | 2 unkillable saws + 6 robots, patrolling between min/max      |
 | `platMove` | 3   | moving platforms                                              |
 | `areas`    | 15  | camera regions: center offset + clamp box                     |
@@ -262,9 +262,84 @@ abuts a neighbouring object. Clipped means grow the rect; abutting means the rec
 is right and `crop` is the lever if the neighbour bleeds in. Neither is fixable
 after extraction.
 
+## The editor runs in two places
+
+One editor, two hosts. `editor/editor-core.js` is the whole thing -- object
+model, canvas, panels, history -- and it knows nothing about where maps or
+textures come from. Everything environment-specific goes in behind one `io`
+object:
+
+```
+editor/editor-core.js   the editor. Shared verbatim by both hosts.
+editor/index.html       host 1: the dev server. Maps are files, textures are
+                        PNGs from tiles/extracted/, Play opens /play.
+editor/editor-host.js   host 2: inside the game page. Maps live in
+                        localStorage, textures come from the canvases mapkit
+                        rebuilt out of the player's own artwork, Play hands the
+                        level straight to the running game.
+editor/editor-play.js   playtest controls (the upgrade sliders and what the
+                        tier encoding means), shared by quick-run and host 2.
+```
+
+`MapEditor.mount({ root, io })` returns `{ open, close, isOpen, openMap,
+destroy }`. In the page it is mounted once and always open; in the game it is an
+overlay that opens over the level select, which is why `close()` exists and why
+the key handlers are inert while it is shut -- the same keys belong to the game
+the rest of the time.
+
+The second host is the shareable one:
+
+```
+node mapeditor/tools/build-editor-userscript.js
+  -> dist/johnny-upgrade-map-editor.user.js
+```
+
+That file is **completely self-contained**: no server, ours or anyone's. It is a
+superset of the custom-levels script -- same runtime, same level select, plus an
+editor -- so install one or the other, not both. Levels are saved into the same
+localStorage store the level select imports into, so saving one publishes it to
+the select screen immediately, and **Export** writes a `.json` to hand to
+someone else. Hosting (`HOSTING.md`) remains the multi-person option; it is now
+a preference rather than a requirement.
+
+## Editing gestures
+
+Anything the map stores as numbers that decide where a hazard *reaches* is
+draggable, because those are the fields that look right in a panel and play
+wrong in the level.
+
+- **Patrol ranges** -- two round handles at the corners of the min/max box.
+- **Laser beams** -- a laser is drawn at the size it actually hurts at (the
+  game's own 40px-wide collision box), with a handle at each end. Dragging one
+  sets the length; dragging it past the diagonal stands the beam up or lays it
+  flat. The emitter stays where it is, since the map stores the centre.
+- **Camera clamps** -- drawn as a box beside the area it belongs to, solid on
+  the sides that are clamped and ghosted along the area's own edge on the sides
+  that are not. **Zero means no clamp**, never a clamp at zero, because the game
+  truthiness-tests them -- so dragging a side back onto the area edge is how a
+  clamp is switched off, and the unset handles sit slightly inside the box so
+  they do not land on top of the area's own resize handles.
+- **Door trigger zones** -- green handles, eight to resize and one to move.
+- **Several objects at once** -- the selection gets one box with the usual eight
+  resize handles plus a rotate handle above it. Rotation goes in quarter turns
+  because the map format cannot express anything else: plats, spikes, areas and
+  boss zones are axis-aligned rects in the game's own data. Textures do carry an
+  angle, so they keep their frame and take the rotation on `rot`. Everything
+  attached comes along -- patrol ranges, trigger zones, clamp boxes, crusher
+  landing lines -- and a rotated camera clamp keeps which SIDES were clamped.
+- **Grid snapping applies to the selection, not to each object.** One offset is
+  computed from the object actually under the cursor, snapped once, and applied
+  to everything. Snapping each object separately pulls a carefully spaced run of
+  platforms onto the nearest lines and destroys the spacing that was drawn.
+- **The coordinate readout** sits bottom left and follows the mouse whether or
+  not anything is being dragged; with a grid set it also shows where the next
+  click would land.
+
 ## Runtime architecture
 
-Two packages, one-way dependency. `mapkit` must not know Archipelago exists.
+Two packages, one-way dependency. `mapkit` must not know Archipelago exists, and
+it must not know the editor exists either -- `build-userscript.js` takes extra
+modules and one `extend` hook, and the editor's builder is what passes them in.
 
 ```
 mapeditor/     authoring only, NEVER shipped to AP
@@ -300,7 +375,9 @@ are meant to be drag-droppable, `patcher.js` has to patch these from map data:
   -- the boss rise sequence is pinned to the vanilla pit's absolute Y.
 - `js/level.js` `stomperCode()`: triggers on `sprt.y <= 360`.
 - `js/level.js` `iniLevel()`: `lasers[0]` is force-rotated to a horizontal 590px
-  beam regardless of what the map says.
+  beam regardless of what the map says, and every other laser gets the stock
+  40x180 box. `patcher.js` applies each laser's own `length` and `horizontal`
+  instead; a map that says nothing still gets exactly the vanilla shapes.
 - `world.yEnd = ldat.yEnd` -- vanilla `maps[1]` has no `yEnd`, so the
   fell-out-of-the-world check never fires. A custom map should set it.
 
@@ -320,6 +397,33 @@ Zero-dependency Node, no build step.
 - `tools/sheet.js <dir> [n] [cols] [maxcell]` -- contact sheet for any tile
   directory with a `manifest.json`. Oversized tiles scale to fit rather than
   being clipped.
+- `tools/build-editor-userscript.js [--out <path>] [--maps <dir>]` -- bundle the
+  editor and the runtime into one Tampermonkey script.
+
+## Tests
+
+Three, in rising order of how much they prove and how much they cost.
+
+```
+node mapeditor/tools/test-geometry.js        # pure geometry, no browser
+msedge --headless=new --dump-dom mapeditor/tools/uicheck.html   # the editor UI
+node mapeditor/tools/e2e/server.js           # the shipped userscript + the game
+```
+
+- **test-geometry.js** exercises the parts where a wrong sign is invisible until
+  a map is already broken: four quarter turns must be the identity for every
+  kind, a resize must carry patrol ranges and camera clamps along, and a laser
+  must survive the round trip through the game's format.
+- **uicheck.html** drives the editor itself with synthetic mouse events -- handle
+  hit-testing, beam dragging, clamp switching, group rotate/resize, group
+  snapping, the coordinate readout. Open it in a browser, or dump the DOM
+  headless and read the panel it prints. It needs no server and no tiles.
+- **e2e/** runs the built `dist/*.user.js` against the real SDK in a real
+  browser, the way Tampermonkey would, and drives the whole loop: level select ->
+  editor -> save -> play -> back to the editor. See the comment at the top of
+  `e2e/server.js`; headless needs the devtools protocol rather than `--dump-dom`,
+  because `--virtual-time-budget` freezes requestAnimationFrame and Phaser's
+  entire game loop is requestAnimationFrame.
 
 `tiles/` is gitignored: it is Coolmath/Miniclip's artwork, and it regenerates
 from a local SDK copy plus the hand cuts.

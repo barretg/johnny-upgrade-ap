@@ -106,17 +106,21 @@
         const l = win.lasers[i];
         if (!l) return;
         const wantHorizontal = spec.horizontal === undefined ? (i === 0) : !!spec.horizontal;
-        const isHorizontal = Math.abs(l.angle) === 90;
-        if (wantHorizontal === isHorizontal) return;
-        if (wantHorizontal) {
-          l.height = spec.length || 590;
-          l.angle = 90;
-          win.getBoundsByOffset(l, { l: -(spec.length || 590) / 2, t: -20, r: (spec.length || 590) / 2, b: 20 });
-        } else {
-          l.angle = 0;
-          l.height = spec.length || 180;
-          win.getBoundsByOffset(l, { l: -20, t: -(spec.length || 180) / 2, r: 20, b: (spec.length || 180) / 2 });
-        }
+        /*
+         * Length is applied whether or not the orientation changed. Skipping a
+         * laser whose orientation already matched meant a map could set any
+         * length it liked on an upright beam and get the stock 180 anyway --
+         * the beam drawn in the editor and the beam that hurt you were then
+         * different objects. Half the beam sits either side of the sprite,
+         * which is anchored at its centre.
+         */
+        const len = Math.max(8, Number(spec.length) || (wantHorizontal ? 590 : 180));
+        const half = len / 2;
+        l.angle = wantHorizontal ? 90 : 0;
+        l.height = len;
+        win.getBoundsByOffset(l, wantHorizontal
+          ? { l: -half, t: -20, r: half, b: 20 }
+          : { l: -20, t: -half, r: 20, b: half });
       });
     };
   }

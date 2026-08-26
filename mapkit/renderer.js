@@ -41,15 +41,21 @@
     if (!ldat) return;
 
     /*
-     * A map with no art layer is the ORIGINAL level, and the mural is its art.
+     * A map with no `art` KEY is the ORIGINAL level, and the mural is its art.
      *
      * Hiding the mural and filling platforms black is right for a custom map,
      * which has its own textures and would otherwise show the old level's
      * scenery behind them. Doing it to the stock level strips the only thing
      * that makes it look like anything.
+     *
+     * The test is the key, not whether it has anything in it. Treating an EMPTY
+     * art layer as "this is the stock level" meant a level being built showed
+     * the vanilla mural behind it until the first texture was placed -- so a
+     * blank level looked like the last one played, and the scenery vanished the
+     * moment a single tile went down. Everything the editor saves has an `art`
+     * array, empty or not; the stock map has no such key at all.
      */
-    const hasArt = Array.isArray(ldat.art) && ldat.art.length > 0;
-    if (!hasArt) return null;
+    if (!Array.isArray(ldat.art)) return null;
 
     // 1. hide the vanilla mural
     win.isprt.children.slice().forEach((c) => {

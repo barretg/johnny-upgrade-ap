@@ -1,15 +1,36 @@
 # Sharing custom levels
 
-## The userscript
+## The two userscripts
 
-`dist/johnny-upgrade-custom-levels.user.js` — one file, install in Tampermonkey.
+Pick one. Both are a single file, installed in Tampermonkey.
+
+| | what it is |
+|---|---|
+| `dist/johnny-upgrade-custom-levels.user.js` | play custom levels: level select, import, per-level saves |
+| `dist/johnny-upgrade-map-editor.user.js` | all of that **plus the editor**, for people who want to build levels |
+
+The editor script is a superset, so installing both just gives you two level
+selects fighting over the title screen. The playing script is smaller (76KB vs
+181KB) and is the right one to hand to someone who only wants to play.
+
+Neither talks to a server. The editor script keeps levels in the browser's own
+storage and moves them as files through **Export** and **Import level…**; the
+hosted editor (`mapeditor/HOSTING.md`) is a separate, optional thing for a group
+working on levels together.
 
 Rebuild after changing anything in `mapkit/`:
 
 ```
 node mapkit/build-userscript.js
 node mapkit/build-userscript.js --maps mapeditor/maps    # bundle levels in
+node mapeditor/tools/build-editor-userscript.js          # the editor build
 ```
+
+Both scripts match `https://www.coolmathgames.com/0-johnny-upgrade/play*` and
+nothing else. The game lives in that frame; matching the wrapper page as well
+put a second copy on a page with no game in it, which polled for a minute and
+then logged "game never appeared" — which reads exactly like the real failure
+and is not one.
 
 Without `--maps` it ships empty and players import their own, which is the right
 default for testing: the script goes out once, levels move separately.
@@ -86,6 +107,28 @@ not recognise, so a file carrying these extras still loads in the stock game.
   crusher.
 - **doors** — `closeTo`, `speed`, `trigger` (`start` / `zone` / `boss` /
   `never`), `zx`/`zy`/`zw`/`zh` for the zone, `open` to slide the other way.
+- **lasers** — `length` and `horizontal`. The stock game force-rotated the first
+  laser to a horizontal 590px beam and gave the rest a 40x180 upright box,
+  whatever the map said; both are now per laser. A map with neither field still
+  gets exactly those vanilla shapes.
+- **`art: []`** — an empty art layer is not the same as no art layer. A map with
+  the key, empty or not, is a custom map: the vanilla mural is hidden and
+  platforms are filled black. A map with no `art` key at all is the stock level,
+  whose art *is* the mural.
+
+## Building levels in the browser
+
+With the editor script installed, the level select grows a **Level editor**
+button, and every level this browser owns gets a ✎ to reopen it.
+
+- **save** puts the level in the level select immediately — the editor and the
+  select share one store
+- **play** runs it right there, with a playtest panel: the nine upgrade tracks
+  as sliders, defaulting to maxed, remembered between runs. Finishing or dying
+  comes back to the **editor**, not to the level select, because the reason you
+  were playing it is that you are still working on it
+- **export** writes the `.json` out, which is how a level leaves the browser
+- **start from vanilla** copies the stock level, which is already in the page
 
 ## What the player sees
 

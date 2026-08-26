@@ -1,5 +1,11 @@
 # Hosting the editor
 
+Hosting is now **optional**. The same editor ships as a self-contained
+Tampermonkey script — `dist/johnny-upgrade-map-editor.user.js`, see
+`mapkit/SHARING.md` — which needs no server at all and keeps levels in the
+browser. Host this when several people want one shared library of maps on disk,
+or when you want the SDK-backed quick-run page.
+
 The editor is a small Node server with no dependencies. Node 18+ is all it needs.
 
 ```

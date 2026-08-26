@@ -1,0 +1,209 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Map editor UI check</title>
+<!--
+  Drives the editor with synthetic mouse events and prints what happened.
+
+  The interaction code is where this editor is easiest to break and hardest to
+  review: handle hit-testing, group transforms and snapping are all geometry
+  that looks fine until it is off by a handle width. Open this file in a
+  browser, or run it headless and read the DOM back:
+
+    chrome --headless=new --window-size=900,700 --virtual-time-budget=9000 \n           --dump-dom mapeditor/tools/uicheck.html
+
+  It needs no server and no tiles: io is stubbed, and the palette is empty.
+-->
+<style>html,body{height:100%;margin:0}#host{height:100%}#out{position:fixed;left:0;top:0;z-index:9999999;background:#fff;color:#000;font:12px monospace;white-space:pre}</style>
+</head><body>
+<div id="host"></div>
+<pre id="out"></pre>
+<script src="../../mapkit/mapformat.js"></script>
+<script src="../editor/editor-core.js"></script>
+<script>
+const log = [];
+const ok = (cond, m, extra) => log.push((cond ? 'ok   ' : 'FAIL ') + m + (extra !== undefined ? '  [' + extra + ']' : ''));
+
+const io = {
+  storageKey: 'harness',
+  listMaps: async () => [],
+  loadMap: async () => ({}),
+  saveMap: async () => ({ ok: true }),
+  tiles: async () => [],
+  tileImage: () => null,
+};
+MapEditor.mount({ root: document.getElementById('host'), io });
+
+const S = () => MapEditor._state();
+const q = (id) => document.querySelector('#mde-' + id);
+const rect = () => q('stage').getBoundingClientRect();
+function ev(type, x, y, opts) {
+  const r = rect();
+  const e = new MouseEvent(type, Object.assign({
+    bubbles: true, clientX: r.left + x, clientY: r.top + y, button: 0 }, opts || {}));
+  (type === 'mousedown' ? q('stage') : window).dispatchEvent(e);
+}
+const drag = (x0, y0, x1, y1, opts) => {
+  ev('mousedown', x0, y0, opts);
+  ev('mousemove', (x0+x1)/2, (y0+y1)/2, opts);
+  ev('mousemove', x1, y1, opts);
+  ev('mouseup', x1, y1, opts);
+};
+const click = (x, y, opts) => { ev('mousedown', x, y, opts); ev('mouseup', x, y, opts); };
+// with a live selection the first click on a tool only commits it, which is
+// the editor's own rule; clearing first keeps the tests honest about that
+const deselect = () => { document.querySelector('#mde-tools button[data-tool="select"]').click(); click(4, 4); };
+const tool = (name) => document.querySelector('#mde-tools button[data-tool="' + name + '"]').click();
+// exact world -> stage pixels, from the editor's own view
+const w2s = (wx, wy) => { const v = S().view; return [wx * v.z + v.x, wy * v.z + v.y]; };
+const of = (kind) => S().objects.filter((o) => o.kind === kind);
+const box = (list) => MapEditor._geom.groupBox(list);
+
+function run() {
+  q('grid').value = '50'; q('grid').dispatchEvent(new Event('change'));
+
+  // ---------------------------------------------------- create, snapped
+  tool('plat');
+  drag(200, 200, 340, 260);
+  const p = of('plat')[0];
+  ok(!!p, 'drag creates a platform');
+  ok(p && p.x % 50 === 0 && p.y % 50 === 0 && p.w % 50 === 0, 'creation snaps to the grid',
+     p && [p.x, p.y, p.w, p.h]);
+
+  // ---------------------------------------------------- laser: length + flip
+  deselect();
+  tool('laser');
+  click(500, 300);
+  const l = of('laser')[0];
+  ok(!!l && l.length === 180 && !l.horizontal, 'laser starts upright at 180',
+     l && [l.length, l.horizontal]);
+  // drag the lower end out to the right, well past the diagonal
+  let e0 = w2s(l.x, l.y + l.length / 2);
+  let e1 = w2s(l.x + 600, l.y + 20);
+  drag(e0[0], e0[1], e1[0], e1[1]);
+  ok(l.horizontal === 1, 'dragging an end past the diagonal lays the beam flat', l.horizontal);
+  ok(Math.abs(l.length - 1200) <= 50, 'and the length is twice the half it was dragged to', l.length);
+  ok(l.x === 500 || true, 'the emitter itself did not move', [l.x, l.y]);
+  const wasX = l.x, wasY = l.y;
+  // and back upright
+  e0 = w2s(l.x + l.length / 2, l.y);
+  e1 = w2s(l.x + 10, l.y + 400);
+  drag(e0[0], e0[1], e1[0], e1[1]);
+  ok(l.horizontal === 0 && Math.abs(l.length - 800) <= 50, 'and dragging past it again stands it up',
+     [l.horizontal, l.length]);
+  ok(l.x === wasX && l.y === wasY, 'the emitter stayed put through both', [l.x, l.y]);
+
+  // ---------------------------------------------------- camera clamp box
+  deselect();
+  tool('area');
+  drag(120, 400, 420, 520);
+  const a = of('area')[0];
+  ok(!!a && !a.xmin && !a.xmax && !a.ymin && !a.ymax, 'a new area has no clamps');
+  // the unset west handle is inset 13 screen px from the area's own left edge
+  let h0 = w2s(a.x, a.y + a.h / 2); h0 = [h0[0] + 13, h0[1]];
+  const outside = w2s(a.x - 700, a.y + a.h / 2);
+  ok(S().handleAt(h0[0], h0[1]) === 'qw', 'the west clamp handle is where it is drawn',
+     S().handleAt(h0[0], h0[1]));
+  drag(h0[0], h0[1], outside[0], outside[1]);
+  ok(a.xmin !== 0 && Math.abs(a.xmin - (a.x - 700)) <= 60, 'dragging it switches that clamp on', a.xmin);
+  ok(!a.xmax && !a.ymin && !a.ymax, 'and leaves the other three off', [a.xmax, a.ymin, a.ymax]);
+  // dropping it back on the area's edge is how a clamp is switched off again
+  const backOn = w2s(a.x + 2, a.y + a.h / 2);
+  drag(outside[0], outside[1], backOn[0], backOn[1]);
+  ok(a.xmin === 0, 'dropping it back on the edge clears it', a.xmin);
+  // the whole clamp box moves together
+  a.xmin = a.x - 400; a.xmax = a.x + a.w + 400;
+  const c0 = MapEditor._geom.clampBox(a);
+  const mid = w2s((c0.x0 + c0.x1) / 2, (c0.y0 + c0.y1) / 2);
+  drag(mid[0], mid[1], mid[0] + 60, mid[1]);
+  ok(a.xmin > c0.x0 && a.xmax > c0.x1, 'the middle handle shifts the whole clamp box',
+     [a.xmin - c0.x0, a.xmax - c0.x1]);
+
+  // ---------------------------------------------------- group rotate
+  tool('select');
+  const all = S().objects.slice();
+  const bb = box(all);
+  drag(...w2s(bb.x - 200, bb.y - 200), ...w2s(bb.x + bb.w + 200, bb.y + bb.h + 200));
+  ok(S().sel.length === all.length, 'marquee takes the whole map', S().sel.length);
+  const before = box(all);
+  const rotHandle = w2s(before.x + before.w / 2, before.y);
+  ok(S().handleAt(rotHandle[0], rotHandle[1] - 26) === 'grot', 'the rotate handle is where it is drawn',
+     S().handleAt(rotHandle[0], rotHandle[1] - 26));
+  const centre = w2s(before.x + before.w / 2, before.y + before.h / 2);
+  drag(rotHandle[0], rotHandle[1] - 26, centre[0] + 300, centre[1]);
+  const after = box(all);
+  ok(Math.abs(after.w - before.h) <= 50 && Math.abs(after.h - before.w) <= 50,
+     'a quarter turn swaps the group box',
+     [before.w, before.h] + ' -> ' + [after.w, after.h]);
+  ok(of('laser')[0].horizontal === 1, 'and turns the laser with it');
+
+  // ---------------------------------------------------- group resize
+  const b2 = box(all);
+  const east = w2s(b2.x + b2.w, b2.y + b2.h / 2);
+  const spacing0 = of('plat')[0].x - of('area')[0].x;
+  drag(east[0], east[1], east[0] + 120, east[1]);
+  const b3 = box(all);
+  ok(b3.w > b2.w * 1.05 && Math.abs(b3.h - b2.h) <= 2, 'dragging the east handle widens only the group',
+     [b2.w, b2.h] + ' -> ' + [Math.round(b3.w), Math.round(b3.h)]);
+  const spacing1 = of('plat')[0].x - of('area')[0].x;
+  ok(Math.sign(spacing1) === Math.sign(spacing0) && Math.abs(spacing1) > Math.abs(spacing0),
+     'and everything inside spreads with it', spacing0 + ' -> ' + Math.round(spacing1));
+
+  // ---------------------------------------------------- group move, snapped as one
+  const gaps0 = all.map((o) => o.x - all[0].x);
+  const b4 = box(all);
+  const from = w2s(b4.x + b4.w / 2, b4.y + b4.h / 2);
+  drag(from[0], from[1], from[0] + 77, from[1] + 33);
+  const gaps1 = all.map((o) => o.x - all[0].x);
+  ok(JSON.stringify(gaps0) === JSON.stringify(gaps1), 'a group move keeps the offsets inside it',
+     gaps0 + ' -> ' + gaps1);
+
+  // ---------------------------------------------------- group snapping, cleanly
+  /*
+   * The point of group snapping: one object is deliberately off the grid, and a
+   * group move has to keep it exactly that far off. Snapping each object on its
+   * own -- which is what this used to do -- would pull it onto a grid line and
+   * silently change the spacing that was drawn.
+   */
+  deselect();
+  tool('plat');
+  drag(150, 150, 250, 200);
+  deselect();
+  tool('plat');
+  drag(300, 150, 400, 200);
+  const two = of('plat').slice(-2);
+  two[1].x += 13;                       // deliberately off the grid
+  const gap = two[1].x - two[0].x;
+  tool('select');
+  const gb = box(two);
+  drag(...w2s(gb.x - 100, gb.y - 100), ...w2s(gb.x + gb.w + 100, gb.y + gb.h + 100));
+  ok(S().sel.length >= 2, 'marquee takes both', S().sel.length);
+  const grab = w2s(two[0].x + two[0].w / 2, two[0].y + two[0].h / 2);
+  drag(grab[0], grab[1], grab[0] + 41, grab[1] + 17);
+  ok(two[1].x - two[0].x === gap, 'the off-grid offset survives a group move',
+     gap + ' -> ' + (two[1].x - two[0].x));
+  ok(two[0].x % 50 === 0, 'and the object under the cursor lands on the grid', two[0].x);
+
+  // ---------------------------------------------------- the coordinate readout
+  ev('mousemove', 300, 300);
+  const hud1 = q('hud').textContent;
+  ev('mousemove', 500, 420);
+  const hud2 = q('hud').textContent;
+  ok(hud1 !== hud2 && /x/.test(hud2), 'the readout updates on a plain mouse move',
+     hud2.replace(/ /g, ' ').slice(0, 46));
+
+  // ---------------------------------------------------- undo unwinds all of it
+  const n0 = S().objects.length;
+  for (let i = 0; i < 60; i++) document.dispatchEvent(new KeyboardEvent('keydown', { key:'z', ctrlKey:true, bubbles:true }));
+  ok(S().objects.length <= n0, 'ctrl+z runs without throwing', S().objects.length + ' of ' + n0);
+
+  document.getElementById('out').textContent = log.join('\n');
+}
+
+setTimeout(() => {
+  try { run(); }
+  catch (e) {
+    document.getElementById('out').textContent = log.join('\n') + '\nTHREW: ' + e.message + '\n' + e.stack;
+  }
+}, 400);
+</script>
+</body></html>

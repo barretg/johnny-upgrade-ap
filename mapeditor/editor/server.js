@@ -137,6 +137,13 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, 'text/html; charset=utf-8', fs.readFileSync(path.join(__dirname, 'index.html')));
     }
 
+    // the editor itself, shared with the userscript build
+    if (p === '/editor-core.js' || p === '/editor-host.js' || p === '/editor-play.js') {
+      const f = path.join(__dirname, path.basename(p));
+      if (!fs.existsSync(f)) return send(res, 404, 'text/plain', 'no such module');
+      return send(res, 200, 'application/javascript', fs.readFileSync(f));
+    }
+
     if (p === '/api/state') {
       const manifest = fs.existsSync(path.join(TILES, 'manifest.json'))
         ? JSON.parse(fs.readFileSync(path.join(TILES, 'manifest.json'), 'utf8')) : [];

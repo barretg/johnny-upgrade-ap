@@ -1,10 +1,9 @@
 // ==UserScript==
 // @name         Johnny Upgrade — Custom Levels
 // @namespace    johnny-upgrade-mapkit
-// @version      0.1.0
+// @version      0.2.0
 // @description  Play custom Johnny Upgrade levels. Adds a level select with import, per-level saves, and audio controls.
 // @match        https://www.coolmathgames.com/0-johnny-upgrade/play*
-// @match        https://www.coolmathgames.com/0-johnny-upgrade*
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
@@ -166,8 +165,19 @@
         x: o.x, y: o.y, xo: o.x, yo: o.y + 60,
         xxsi: o.xxsi, yysi: o.yysi, xmax: o.xmax, ymax: o.ymax,
       })),
+      /*
+       * Lasers carry their own length and orientation.
+       *
+       * iniLevel() force-rotates lasers[0] to a horizontal 590px beam whatever
+       * the map says, and gives every other one the stock 40x180 upright box.
+       * mapkit's patcher unpins both, but only for a laser that states what it
+       * wants -- so the editor always writes them, and a map from the editor
+       * never depends on which slot a laser happens to sit in.
+       */
       lasers: by('laser').map((o) => ({
-        x: o.x, y: o.y, ctMax: o.ctMax, ctSwitch: o.ctSwitch, ctCurr: o.ctCurr })),
+        x: o.x, y: o.y, ctMax: o.ctMax, ctSwitch: o.ctSwitch, ctCurr: o.ctCurr,
+        horizontal: o.horizontal ? true : false,
+        length: Math.max(8, Math.round(Number(o.length) || (o.horizontal ? 590 : 180))) })),
       enes: by('ene').map((o) => ({
         x: o.x, y: o.y, typ: o.typ, xx: o.xx, yy: o.yy,
         xmin: o.xmin, xmax: o.xmax, ymin: o.ymin, ymax: o.ymax })),
@@ -224,8 +234,20 @@
     (g.spikes || []).forEach((s) => add('spike', { x: s.x, y: s.y, w: s.w, h: s.h }));
     (g.bombs || []).forEach((b) => add('bomb', {
       x: b.x, y: b.y, w: 0, h: 0, xxsi: b.xxsi, yysi: b.yysi, xmax: b.xmax, ymax: b.ymax }));
-    (g.lasers || []).forEach((l) => add('laser', {
-      x: l.x, y: l.y, w: 0, h: 0, ctMax: l.ctMax, ctSwitch: l.ctSwitch, ctCurr: l.ctCurr }));
+    /*
+     * A map that predates the length/orientation fields -- the stock level, or
+     * anything the editor saved before them -- gets what the game would have
+     * given it: the first laser horizontal at 590, the rest upright at 180.
+     * That is the same default the patcher applies, so reading a map in and
+     * writing it straight back out cannot move a beam.
+     */
+    (g.lasers || []).forEach((l, i) => {
+      const horizontal = l.horizontal === undefined ? (i === 0) : !!l.horizontal;
+      add('laser', {
+        x: l.x, y: l.y, w: 0, h: 0, ctMax: l.ctMax, ctSwitch: l.ctSwitch, ctCurr: l.ctCurr,
+        horizontal: horizontal ? 1 : 0,
+        length: Number(l.length) || (horizontal ? 590 : 180) });
+    });
     (g.enes || []).forEach((e) => add('ene', {
       x: e.x, y: e.y, w: 0, h: 0, typ: e.typ, xx: e.xx, yy: e.yy,
       xmin: e.xmin, xmax: e.xmax, ymin: e.ymin, ymax: e.ymax }));
@@ -965,15 +987,21 @@
     if (!ldat) return;
 
     /*
-     * A map with no art layer is the ORIGINAL level, and the mural is its art.
+     * A map with no `art` KEY is the ORIGINAL level, and the mural is its art.
      *
      * Hiding the mural and filling platforms black is right for a custom map,
      * which has its own textures and would otherwise show the old level's
      * scenery behind them. Doing it to the stock level strips the only thing
      * that makes it look like anything.
+     *
+     * The test is the key, not whether it has anything in it. Treating an EMPTY
+     * art layer as "this is the stock level" meant a level being built showed
+     * the vanilla mural behind it until the first texture was placed -- so a
+     * blank level looked like the last one played, and the scenery vanished the
+     * moment a single tile went down. Everything the editor saves has an `art`
+     * array, empty or not; the stock map has no such key at all.
      */
-    const hasArt = Array.isArray(ldat.art) && ldat.art.length > 0;
-    if (!hasArt) return null;
+    if (!Array.isArray(ldat.art)) return null;
 
     // 1. hide the vanilla mural
     win.isprt.children.slice().forEach((c) => {
@@ -1165,17 +1193,21 @@
         const l = win.lasers[i];
         if (!l) return;
         const wantHorizontal = spec.horizontal === undefined ? (i === 0) : !!spec.horizontal;
-        const isHorizontal = Math.abs(l.angle) === 90;
-        if (wantHorizontal === isHorizontal) return;
-        if (wantHorizontal) {
-          l.height = spec.length || 590;
-          l.angle = 90;
-          win.getBoundsByOffset(l, { l: -(spec.length || 590) / 2, t: -20, r: (spec.length || 590) / 2, b: 20 });
-        } else {
-          l.angle = 0;
-          l.height = spec.length || 180;
-          win.getBoundsByOffset(l, { l: -20, t: -(spec.length || 180) / 2, r: 20, b: (spec.length || 180) / 2 });
-        }
+        /*
+         * Length is applied whether or not the orientation changed. Skipping a
+         * laser whose orientation already matched meant a map could set any
+         * length it liked on an upright beam and get the stock 180 anyway --
+         * the beam drawn in the editor and the beam that hurt you were then
+         * different objects. Half the beam sits either side of the sprite,
+         * which is anchored at its centre.
+         */
+        const len = Math.max(8, Number(spec.length) || (wantHorizontal ? 590 : 180));
+        const half = len / 2;
+        l.angle = wantHorizontal ? 90 : 0;
+        l.height = len;
+        win.getBoundsByOffset(l, wantHorizontal
+          ? { l: -half, t: -20, r: half, b: 20 }
+          : { l: -20, t: -half, r: 20, b: half });
       });
     };
   }
@@ -1501,6 +1533,19 @@
       imp.onclick = pickFiles;
       bar.appendChild(imp);
     }
+    /*
+     * Extra toolbar buttons, read fresh on every render.
+     *
+     * Read rather than captured because whoever adds one may only exist after
+     * the selector is installed -- the level editor is bundled on top of this
+     * screen and registers itself once the game is up, and a captured array
+     * would have been empty at that point.
+     */
+    for (const b of (cfg.buttons || [])) {
+      const btn = el('button', b.primary ? 'mk-primary' : null, b.label);
+      btn.onclick = () => b.onClick();
+      bar.appendChild(btn);
+    }
     bar.appendChild(el('span', 'mk-sp'));
     if (cfg.onExit) {
       const back = el('button', null, 'Back to title');
@@ -1592,6 +1637,14 @@
         render();
       };
       name.appendChild(rst);
+    }
+    // Only a level this browser owns can be edited: the stock level and
+    // anything bundled into the script have no editable copy to open.
+    if (m.source === 'imported' && cfg.onEditLevel) {
+      const ed = el('span', 'mk-del mk-reset', '✎');
+      ed.title = 'Open this level in the editor';
+      ed.onclick = (e) => { e.stopPropagation(); cfg.onEditLevel(m.id); };
+      name.appendChild(ed);
     }
     if (m.source === 'imported' && cfg.onDelete) {
       const del = el('span', 'mk-del', '✕');
@@ -1694,10 +1747,17 @@
 
   var RECIPE = {"version":1,"note":"Rebuilds the tileset from the player's own lvlGrfx1..6. No artwork included.","slice":{"w":1710,"h":1665,"cols":3,"rows":2,"keys":["lvlGrfx1","lvlGrfx2","lvlGrfx3","lvlGrfx4","lvlGrfx5","lvlGrfx6"]},"defaults":{"luma":14,"chroma":12},"tiles":[{"name":"alt_blue_surface","rect":{"x":2685,"y":1200,"w":339,"h":30},"norm":{}},{"name":"big_metal_corner","rect":{"x":1717,"y":2328,"w":83,"h":81},"norm":{"bg":[[32,32,32],[0,0,0]],"tol":6}},{"name":"blue_accent_surface","rect":{"x":2410,"y":1080,"w":100,"h":81},"norm":{"mode":"none"}},{"name":"blue_accent_surface_corner","rect":{"x":2610,"y":1080,"w":80,"h":120},"norm":{"mode":"none"}},{"name":"blue_beam_surface","rect":{"x":4632,"y":1407,"w":96,"h":4},"norm":{}},{"name":"blue_surface","rect":{"x":3970,"y":1730,"w":380,"h":40},"norm":{"luma":30,"chroma":20}},{"name":"boss_door_has_some_other_platform_edges_on_edges","rect":{"x":3599,"y":2500,"w":121,"h":30},"norm":{"bg":[[32,32,32],[0,0,0]],"tol":8,"mask":[[0,0,4,11]]}},{"name":"box","rect":{"x":4349,"y":1630,"w":101,"h":100},"norm":{"mode":"none"}},{"name":"green_accent_under_blue_beam_surface_which_should_be_trimmed","rect":{"x":1300,"y":1462,"w":170,"h":30},"norm":{}},{"name":"green_beam_surface","rect":{"x":3686,"y":2361,"w":28,"h":139},"norm":{}},{"name":"hazard_surface","rect":{"x":2070,"y":1080,"w":120,"h":80},"norm":{"bg":[[0,0,0],[32,32,32],[36,36,36]],"tol":5}},{"name":"hazard_surface_edge","rect":{"x":2190,"y":1080,"w":120,"h":80},"norm":{"bg":[[0,0,0],[32,32,32],[36,36,36]],"tol":5}},{"name":"large_metal_surface","rect":{"x":1949,"y":1571,"w":53,"h":100},"norm":{}},{"name":"large_metal_surface_alt","rect":{"x":3018,"y":1726,"w":100,"h":53},"norm":{}},{"name":"large_rock_surface","rect":{"x":1230,"y":1080,"w":100,"h":58},"norm":{}},{"name":"laser_base","rect":{"x":1700,"y":1240,"w":60,"h":42},"norm":{}},{"name":"rail","rect":{"x":3419,"y":2720,"w":161,"h":50},"norm":{"luma":40,"chroma":30,"pockets":true}},{"name":"rope","rect":{"x":2744,"y":1282,"w":21,"h":207},"norm":{"luma":40,"chroma":30,"pockets":true}},{"name":"small_metal_surface","rect":{"x":709,"y":2331,"w":25,"h":90},"norm":{}},{"name":"small_rock_filler_surface","rect":{"x":2689,"y":2677,"w":51,"h":22},"norm":{}},{"name":"small_rock_surface","rect":{"x":708,"y":1290,"w":25,"h":100},"norm":{}},{"name":"spike_with_a_little_blue_beam_that_needs_trimming","rect":{"x":4740,"y":1510,"w":40,"h":40},"norm":{"luma":46,"chroma":30}},{"name":"square_rocks_block","rect":{"x":4079,"y":1090,"w":60,"h":100},"norm":{}},{"name":"square_rocks_block_corner","rect":{"x":4139,"y":1090,"w":41,"h":100},"norm":{"bg":[[32,32,32]],"tol":3}},{"name":"steel_surface","rect":{"x":3449,"y":1727,"w":521,"h":73},"norm":{}},{"name":"wooden_platform_surface","rect":{"x":3090,"y":1489,"w":140,"h":22},"norm":{"luma":40,"chroma":30}},{"name":"x_center_surface","rect":{"x":2980,"y":2960,"w":100,"h":89},"norm":{}}],"composites":[{"name":"grass_surface","width":149,"recovered":26,"extend":8,"sources":[{"x":807,"y":994},{"x":1649,"y":1055},{"x":1061,"y":1055}],"rule":"green"}]};
   var BUNDLED = [];
+  /*
+   * An optional extension, injected at build time: a function (ctx) run once
+   * everything is installed. The level-editor build uses it to add itself to
+   * this screen. Nothing in mapkit knows what it does.
+   */
+  var EXTEND = null;
   var KEY_PREFIX = 'mkTile_';
   var STORE = 'mapkit-imported';
 
   var settings = null, saves = null, pending = null, installed = false;
+  var selectCfg = null, selectHandle = null;
 
   function loadImported() {
     try { var r = localStorage.getItem(STORE); var l = r ? JSON.parse(r) : []; return Array.isArray(l) ? l : []; }
@@ -1715,13 +1775,15 @@
    * executed, so everything we patch is still undefined. Polling is the whole
    * of it -- these are plain globals, and the splash screen gives us seconds.
    */
-  function ready() {
-    return typeof window.iniLevel === 'function' &&
-           typeof window.LevelState === 'object' &&
-           typeof window.TitleState === 'object' &&
-           typeof window.LoaderState === 'object' &&
-           typeof window.maps !== 'undefined';
+  var NEEDS = ['iniLevel', 'LevelState', 'TitleState', 'LoaderState', 'maps', 'newState'];
+  function missing() {
+    var out = [];
+    for (var i = 0; i < NEEDS.length; i++) {
+      if (typeof window[NEEDS[i]] === 'undefined') out.push(NEEDS[i]);
+    }
+    return out;
   }
+  function ready() { return missing().length === 0; }
 
   function install() {
     if (installed) return;
@@ -1753,12 +1815,14 @@
     }
     var imported = loadImported();
     for (var j = 0; j < imported.length; j++) {
-      window.Mapkit.addMap({ id: imported[j].id, name: imported[j].name, data: imported[j].data, source: 'imported' });
+      window.Mapkit.addMap({ id: imported[j].id, name: imported[j].name, data: imported[j].data,
+        thumb: imported[j].thumb || null, source: 'imported' });
     }
 
-    window.MapkitSelect.install(window, {
+    selectCfg = {
       mapkit: window.Mapkit,
-      title: 'Johnny Upgrade — Custom Levels',
+      title: "Johnny Upgrade — Custom Levels",
+      buttons: [],
       settings: Object.assign({}, settings, {
         resetSave: function () { settings.resetSave(); saves.resetAll(); },
       }),
@@ -1782,7 +1846,8 @@
         saveImported(list);
         window.Mapkit.removeMap(id);
       },
-    });
+    };
+    selectHandle = window.MapkitSelect.install(window, selectCfg);
 
     /*
      * Build the tileset once the game's own preload has finished, because that
@@ -1814,6 +1879,21 @@
     document.addEventListener('adBreakComplete', function () {
       if (pending) window.Mapkit.emit('levelComplete', { id: pending.id, name: pending.name });
     });
+
+    if (EXTEND) {
+      try {
+        EXTEND({
+          win: window,
+          mapkit: window.Mapkit,
+          select: selectHandle,
+          selectCfg: selectCfg,
+          startLevel: startLevel,
+          settings: settings,
+          saves: saves,
+          tileKeyPrefix: KEY_PREFIX,
+        });
+      } catch (e) { console.error('[mapkit] extension failed to install', e); }
+    }
 
     console.info('[mapkit] custom levels ready');
   }

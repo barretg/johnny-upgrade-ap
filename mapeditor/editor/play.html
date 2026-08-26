@@ -24,10 +24,12 @@
   h2 { font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:var(--dim);
        margin:12px 0 7px; font-weight:600; }
   h2:first-child { margin-top:0; }
-  .up { display:grid; grid-template-columns:1fr 46px; gap:6px; align-items:center;
+  /* the sliders come from editor-play.js, which brings its own class names */
+  .mep-up { display:grid; grid-template-columns:1fr 46px; gap:6px; align-items:center;
         margin-bottom:6px; font-size:11px; }
-  .up input[type=range] { width:100%; }
-  .up .v { text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .mep-up input[type=range] { width:100%; }
+  .mep-v { text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; font-size:11px; }
+  .mep-lab { display:block; color:var(--dim); font-size:11px; }
   button { width:100%; background:#262b38; border:1px solid var(--line); color:var(--text);
            border-radius:6px; padding:6px 9px; font:inherit; font-size:11px; cursor:pointer;
            margin-bottom:6px; }
@@ -60,6 +62,7 @@
   <p class="note">Upgrades apply on the next level start — hit restart after changing them.</p>
 </aside>
 
+<script src="/editor-play.js"></script>
 <script src="/mapkit/mapformat.js"></script>
 <script src="/mapkit/crushers.js"></script>
 <script src="/mapkit/doors.js"></script>
@@ -89,22 +92,23 @@
 const params = new URLSearchParams(location.search);
 const MAP_ID = params.get('map');
 
-// game.ldat stores tiers as tenths: v = tierCount * 0.1, for every track.
-const UPGRADES = [
-  { key:'spd',    label:'Speed',        max:10 },
-  { key:'jmp',    label:'Jump power',   max:10 },
-  { key:'jmp2',   label:'Double jump',  max:1  },
-  { key:'tim',    label:'Time limit',   max:24 },
-  { key:'nrg',    label:'Energy',       max:5  },
-  { key:'wpn',    label:'Has gun',      max:1  },
-  { key:'ammo',   label:'Ammo',         max:10 },
-  { key:'gunpow', label:'Gun power',    max:10 },
-  { key:'multi',  label:'Coin multi',   max:10 },
-];
 
 let mapData = null;
 let tileNames = [];
 const setStatus = (s) => { document.getElementById('status').textContent = s; };
+
+/*
+ * Quick-run is used in a loop -- edit, play, back, edit -- and every trip
+ * through it reloads this page, so anything set here used to be thrown away the
+ * moment it was used. The settings are shared with the userscript's playtest
+ * panel, since "how strong is Johnny" is a question about the player rather
+ * than about where the level is being played.
+ */
+function savePrefs() {
+  MapEditorPlay.saveValues(upValues, {
+    quickRestart: document.getElementById('quickRestart').checked,
+  });
+}
 
 // ------------------------------------------------------------------ boot
 async function boot() {
@@ -192,35 +196,27 @@ function patchAndStart() {
 }
 
 // ------------------------------------------------------------------ upgrades
-const upValues = {};
+/*
+ * The tracks, the tier encoding and the remembered settings all live in
+ * editor-play.js, because the userscript playtests levels too and two copies of
+ * "what does game.ldat.spd.v = 0.7 mean" is exactly the kind of thing that goes
+ * quietly out of step. Only the sidebar around them belongs to this page.
+ */
+const upValues = MapEditorPlay.startingValues();
+let sliders = null;
 function buildUpgradePanel() {
-  const host = document.getElementById('ups');
-  for (const u of UPGRADES) {
-    /*
-     * Start maxed. A quick run is for checking whether the level you just drew
-     * works, and starting at zero upgrades means fighting the vanilla progression
-     * before you can even reach most of it. Drag a slider down to test what the
-     * level demands of an under-levelled player.
-     */
-    upValues[u.key] = u.max;
-    const row = document.createElement('div');
-    row.className = 'up';
-    const r = document.createElement('input');
-    r.type = 'range'; r.min = 0; r.max = u.max; r.step = 1; r.value = u.max;
-    const v = document.createElement('span');
-    v.className = 'v'; v.textContent = String(u.max);
-    r.oninput = () => { upValues[u.key] = Number(r.value); v.textContent = r.value; applyUpgrades(); };
-    const lab = document.createElement('label');
-    lab.textContent = u.label;
-    lab.style.gridColumn = '1 / 3';
-    lab.style.color = 'var(--dim)';
-    host.appendChild(lab);
-    row.appendChild(r); row.appendChild(v);
-    host.appendChild(row);
-    u._range = r; u._out = v;
-  }
-  document.getElementById('maxAll').onclick = () => setAll((u) => u.max);
-  document.getElementById('zeroAll').onclick = () => setAll(() => 0);
+  const quick = document.getElementById('quickRestart');
+  const prefs = MapEditorPlay.readPrefs();
+  if (prefs.quickRestart !== undefined) quick.checked = !!prefs.quickRestart;
+  quick.onchange = savePrefs;
+
+  sliders = MapEditorPlay.buildSliders(document, document.getElementById('ups'), upValues, (committed) => {
+    applyUpgrades();
+    if (committed) savePrefs();
+  });
+
+  document.getElementById('maxAll').onclick = () => sliders.set((u) => u.max);
+  document.getElementById('zeroAll').onclick = () => sliders.set(() => 0);
   document.getElementById('restart').onclick = () => {
     applyUpgrades();
     if (window.game && window.levl !== undefined) { levl = 1; newState(); }
@@ -231,26 +227,7 @@ function buildUpgradePanel() {
     location.href = MAP_ID ? '/?map=' + encodeURIComponent(MAP_ID) : '/';
   };
 }
-function setAll(fn) {
-  for (const u of UPGRADES) {
-    const val = fn(u);
-    upValues[u.key] = val; u._range.value = val; u._out.textContent = String(val);
-  }
-  applyUpgrades();
-}
-/*
- * Tiers are stored as tenths of a tier, not as counts -- shop.js computes the
- * real index as Math.round(v * 10) and adds 0.1 per purchase. Writing v = n * 0.1
- * is what the AP client does too.
- */
-function applyUpgrades() {
-  if (!window.game || !game.ldat) return;
-  for (const u of UPGRADES) {
-    if (!game.ldat[u.key]) game.ldat[u.key] = { v:0, u:0.1 };
-    game.ldat[u.key].v = upValues[u.key] * 0.1;
-  }
-  if (game.ldat.csh) game.ldat.csh.v = Math.max(game.ldat.csh.v, 999);
-}
+const applyUpgrades = () => MapEditorPlay.apply(window, upValues);
 
 boot().catch((e) => setStatus('error: ' + e.message));
 </script>

@@ -103,6 +103,19 @@
       imp.onclick = pickFiles;
       bar.appendChild(imp);
     }
+    /*
+     * Extra toolbar buttons, read fresh on every render.
+     *
+     * Read rather than captured because whoever adds one may only exist after
+     * the selector is installed -- the level editor is bundled on top of this
+     * screen and registers itself once the game is up, and a captured array
+     * would have been empty at that point.
+     */
+    for (const b of (cfg.buttons || [])) {
+      const btn = el('button', b.primary ? 'mk-primary' : null, b.label);
+      btn.onclick = () => b.onClick();
+      bar.appendChild(btn);
+    }
     bar.appendChild(el('span', 'mk-sp'));
     if (cfg.onExit) {
       const back = el('button', null, 'Back to title');
@@ -194,6 +207,14 @@
         render();
       };
       name.appendChild(rst);
+    }
+    // Only a level this browser owns can be edited: the stock level and
+    // anything bundled into the script have no editable copy to open.
+    if (m.source === 'imported' && cfg.onEditLevel) {
+      const ed = el('span', 'mk-del mk-reset', '✎');
+      ed.title = 'Open this level in the editor';
+      ed.onclick = (e) => { e.stopPropagation(); cfg.onEditLevel(m.id); };
+      name.appendChild(ed);
     }
     if (m.source === 'imported' && cfg.onDelete) {
       const del = el('span', 'mk-del', '✕');

@@ -47,8 +47,19 @@
         x: o.x, y: o.y, xo: o.x, yo: o.y + 60,
         xxsi: o.xxsi, yysi: o.yysi, xmax: o.xmax, ymax: o.ymax,
       })),
+      /*
+       * Lasers carry their own length and orientation.
+       *
+       * iniLevel() force-rotates lasers[0] to a horizontal 590px beam whatever
+       * the map says, and gives every other one the stock 40x180 upright box.
+       * mapkit's patcher unpins both, but only for a laser that states what it
+       * wants -- so the editor always writes them, and a map from the editor
+       * never depends on which slot a laser happens to sit in.
+       */
       lasers: by('laser').map((o) => ({
-        x: o.x, y: o.y, ctMax: o.ctMax, ctSwitch: o.ctSwitch, ctCurr: o.ctCurr })),
+        x: o.x, y: o.y, ctMax: o.ctMax, ctSwitch: o.ctSwitch, ctCurr: o.ctCurr,
+        horizontal: o.horizontal ? true : false,
+        length: Math.max(8, Math.round(Number(o.length) || (o.horizontal ? 590 : 180))) })),
       enes: by('ene').map((o) => ({
         x: o.x, y: o.y, typ: o.typ, xx: o.xx, yy: o.yy,
         xmin: o.xmin, xmax: o.xmax, ymin: o.ymin, ymax: o.ymax })),
@@ -105,8 +116,20 @@
     (g.spikes || []).forEach((s) => add('spike', { x: s.x, y: s.y, w: s.w, h: s.h }));
     (g.bombs || []).forEach((b) => add('bomb', {
       x: b.x, y: b.y, w: 0, h: 0, xxsi: b.xxsi, yysi: b.yysi, xmax: b.xmax, ymax: b.ymax }));
-    (g.lasers || []).forEach((l) => add('laser', {
-      x: l.x, y: l.y, w: 0, h: 0, ctMax: l.ctMax, ctSwitch: l.ctSwitch, ctCurr: l.ctCurr }));
+    /*
+     * A map that predates the length/orientation fields -- the stock level, or
+     * anything the editor saved before them -- gets what the game would have
+     * given it: the first laser horizontal at 590, the rest upright at 180.
+     * That is the same default the patcher applies, so reading a map in and
+     * writing it straight back out cannot move a beam.
+     */
+    (g.lasers || []).forEach((l, i) => {
+      const horizontal = l.horizontal === undefined ? (i === 0) : !!l.horizontal;
+      add('laser', {
+        x: l.x, y: l.y, w: 0, h: 0, ctMax: l.ctMax, ctSwitch: l.ctSwitch, ctCurr: l.ctCurr,
+        horizontal: horizontal ? 1 : 0,
+        length: Number(l.length) || (horizontal ? 590 : 180) });
+    });
     (g.enes || []).forEach((e) => add('ene', {
       x: e.x, y: e.y, w: 0, h: 0, typ: e.typ, xx: e.xx, yy: e.yy,
       xmin: e.xmin, xmax: e.xmax, ymin: e.ymin, ymax: e.ymax }));

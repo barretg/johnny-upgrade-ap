@@ -12,15 +12,16 @@
  * Usage: node mapkit/build-userscript.js [--out <path>] [--maps <dir>]
  *   --maps  bundle every .json map in a directory as a built-in level.
  *           Omit it and the script ships empty, with players importing their own.
+ *
+ * It is also required as a module, by mapeditor's own builder, which bundles the
+ * editor on top of this runtime. That is why build() takes extraModules and an
+ * `extend` hook rather than knowing anything about the editor: mapkit ships into
+ * the Archipelago client too, and must not depend on authoring tools.
  */
 const fs = require('fs');
 const path = require('path');
 
-const argv = process.argv.slice(2);
-const arg = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
 const HERE = __dirname;
-const OUT = arg('--out', path.join(HERE, '..', 'dist', 'johnny-upgrade-custom-levels.user.js'));
-const MAPS_DIR = arg('--maps', null);
 
 // load order matters: select and patcher lean on the others being defined
 const MODULES = [
@@ -28,17 +29,27 @@ const MODULES = [
   'renderer.js', 'patcher.js', 'saves.js', 'settings.js', 'select.js',
 ];
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
-function header() {
+function header(o) {
   return [
     '// ==UserScript==',
-    '// @name         Johnny Upgrade — Custom Levels',
+    '// @name         ' + (o.name || 'Johnny Upgrade — Custom Levels'),
     '// @namespace    johnny-upgrade-mapkit',
-    '// @version      ' + VERSION,
-    '// @description  Play custom Johnny Upgrade levels. Adds a level select with import, per-level saves, and audio controls.',
+    '// @version      ' + (o.version || VERSION),
+    '// @description  ' + (o.description ||
+      'Play custom Johnny Upgrade levels. Adds a level select with import, per-level saves, and audio controls.'),
+    /*
+     * The game lives in the /play frame, and ONLY there.
+     *
+     * Matching the wrapper page as well put a second copy of this script on
+     * https://www.coolmathgames.com/0-johnny-upgrade, where the SDK globals
+     * never appear -- so it polled for a minute and logged "game never
+     * appeared", which looks exactly like the real failure and is not one.
+     * The Archipelago client has always matched only this URL, and that one is
+     * confirmed working on the live site.
+     */
     '// @match        https://www.coolmathgames.com/0-johnny-upgrade/play*',
-    '// @match        https://www.coolmathgames.com/0-johnny-upgrade*',
     '// @run-at       document-start',
     '// @grant        none',
     '// ==/UserScript==',
@@ -55,7 +66,7 @@ function header() {
   ].join('\n');
 }
 
-function bootstrap(bundledMaps) {
+function bootstrap() {
   return `
 /* ------------------------------------------------------------------ bootstrap */
 (function () {
@@ -63,10 +74,17 @@ function bootstrap(bundledMaps) {
 
   var RECIPE = __TILE_RECIPE__;
   var BUNDLED = __BUNDLED_MAPS__;
+  /*
+   * An optional extension, injected at build time: a function (ctx) run once
+   * everything is installed. The level-editor build uses it to add itself to
+   * this screen. Nothing in mapkit knows what it does.
+   */
+  var EXTEND = __EXTEND__;
   var KEY_PREFIX = 'mkTile_';
   var STORE = 'mapkit-imported';
 
   var settings = null, saves = null, pending = null, installed = false;
+  var selectCfg = null, selectHandle = null;
 
   function loadImported() {
     try { var r = localStorage.getItem(STORE); var l = r ? JSON.parse(r) : []; return Array.isArray(l) ? l : []; }
@@ -84,13 +102,15 @@ function bootstrap(bundledMaps) {
    * executed, so everything we patch is still undefined. Polling is the whole
    * of it -- these are plain globals, and the splash screen gives us seconds.
    */
-  function ready() {
-    return typeof window.iniLevel === 'function' &&
-           typeof window.LevelState === 'object' &&
-           typeof window.TitleState === 'object' &&
-           typeof window.LoaderState === 'object' &&
-           typeof window.maps !== 'undefined';
+  var NEEDS = ['iniLevel', 'LevelState', 'TitleState', 'LoaderState', 'maps', 'newState'];
+  function missing() {
+    var out = [];
+    for (var i = 0; i < NEEDS.length; i++) {
+      if (typeof window[NEEDS[i]] === 'undefined') out.push(NEEDS[i]);
+    }
+    return out;
   }
+  function ready() { return missing().length === 0; }
 
   function install() {
     if (installed) return;
@@ -122,12 +142,14 @@ function bootstrap(bundledMaps) {
     }
     var imported = loadImported();
     for (var j = 0; j < imported.length; j++) {
-      window.Mapkit.addMap({ id: imported[j].id, name: imported[j].name, data: imported[j].data, source: 'imported' });
+      window.Mapkit.addMap({ id: imported[j].id, name: imported[j].name, data: imported[j].data,
+        thumb: imported[j].thumb || null, source: 'imported' });
     }
 
-    window.MapkitSelect.install(window, {
+    selectCfg = {
       mapkit: window.Mapkit,
-      title: 'Johnny Upgrade — Custom Levels',
+      title: __TITLE__,
+      buttons: [],
       settings: Object.assign({}, settings, {
         resetSave: function () { settings.resetSave(); saves.resetAll(); },
       }),
@@ -151,7 +173,8 @@ function bootstrap(bundledMaps) {
         saveImported(list);
         window.Mapkit.removeMap(id);
       },
-    });
+    };
+    selectHandle = window.MapkitSelect.install(window, selectCfg);
 
     /*
      * Build the tileset once the game's own preload has finished, because that
@@ -184,6 +207,21 @@ function bootstrap(bundledMaps) {
       if (pending) window.Mapkit.emit('levelComplete', { id: pending.id, name: pending.name });
     });
 
+    if (EXTEND) {
+      try {
+        EXTEND({
+          win: window,
+          mapkit: window.Mapkit,
+          select: selectHandle,
+          selectCfg: selectCfg,
+          startLevel: startLevel,
+          settings: settings,
+          saves: saves,
+          tileKeyPrefix: KEY_PREFIX,
+        });
+      } catch (e) { console.error('[mapkit] extension failed to install', e); }
+    }
+
     console.info('[mapkit] custom levels ready');
   }
 
@@ -205,39 +243,67 @@ function bootstrap(bundledMaps) {
 `;
 }
 
-function main() {
+/*
+ * Build a userscript.
+ *
+ *   out           where to write it
+ *   mapsDir       bundle every .json map in this directory as a built-in level
+ *   extraModules  [{ label, src }] concatenated after mapkit's own modules
+ *   extend        source text of a function (ctx) run once mapkit is installed
+ *   name/description/version/title  userscript metadata and select-screen title
+ */
+function build(opts) {
+  opts = opts || {};
+  const out = opts.out || path.join(HERE, '..', 'dist', 'johnny-upgrade-custom-levels.user.js');
   const recipe = JSON.parse(fs.readFileSync(path.join(HERE, 'tiles.json'), 'utf8'));
 
   const bundled = [];
-  if (MAPS_DIR) {
-    for (const f of fs.readdirSync(MAPS_DIR).filter((x) => x.endsWith('.json'))) {
-      const data = JSON.parse(fs.readFileSync(path.join(MAPS_DIR, f), 'utf8'));
+  if (opts.mapsDir) {
+    for (const f of fs.readdirSync(opts.mapsDir).filter((x) => x.endsWith('.json'))) {
+      const data = JSON.parse(fs.readFileSync(path.join(opts.mapsDir, f), 'utf8'));
       if (!data.plats) continue;
       const id = (data.meta && data.meta.id) || f.replace(/\.json$/, '');
       bundled.push({ id, name: (data.meta && data.meta.name) || id, data });
     }
   }
 
-  const parts = [header()];
+  const parts = [header(opts)];
   for (const m of MODULES) {
-    const src = fs.readFileSync(path.join(HERE, m), 'utf8');
-    parts.push('/* ===== mapkit/' + m + ' ===== */\n' + src + '\n');
+    parts.push('/* ===== mapkit/' + m + ' ===== */\n' + fs.readFileSync(path.join(HERE, m), 'utf8') + '\n');
   }
-  parts.push(
-    bootstrap()
-      .replace('__TILE_RECIPE__', JSON.stringify(recipe))
-      .replace('__BUNDLED_MAPS__', JSON.stringify(bundled))
-  );
+  for (const m of (opts.extraModules || [])) {
+    parts.push('/* ===== ' + m.label + ' ===== */\n' + m.src + '\n');
+  }
+  // replacements go in through a function, so a $& or $' inside a map's data
+  // is inserted literally instead of being read as a substitution pattern
+  const put = (s, token, value) => s.replace(token, () => value);
+  let boot = bootstrap();
+  boot = put(boot, '__TILE_RECIPE__', JSON.stringify(recipe));
+  boot = put(boot, '__BUNDLED_MAPS__', JSON.stringify(bundled));
+  boot = put(boot, '__TITLE__', JSON.stringify(opts.title || 'Johnny Upgrade — Custom Levels'));
+  boot = put(boot, '__EXTEND__', opts.extend || 'null');
+  parts.push(boot);
 
-  const out = parts.join('\n');
-  fs.mkdirSync(path.dirname(OUT), { recursive: true });
-  fs.writeFileSync(OUT, out);
-
-  console.log('wrote ' + path.relative(process.cwd(), OUT));
-  console.log('  ' + (out.length / 1024).toFixed(0) + ' KB');
-  console.log('  ' + MODULES.length + ' modules, ' + recipe.tiles.length + ' tile recipes, ' +
-    bundled.length + ' bundled level' + (bundled.length === 1 ? '' : 's'));
-  if (!bundled.length) console.log('  (no levels bundled -- players import their own)');
+  const text = parts.join('\n');
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, text);
+  return { out, text, bundled, recipe, modules: MODULES.length + (opts.extraModules || []).length };
 }
 
-main();
+function main() {
+  const argv = process.argv.slice(2);
+  const arg = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
+  const r = build({
+    out: arg('--out', undefined),
+    mapsDir: arg('--maps', null),
+  });
+  console.log('wrote ' + path.relative(process.cwd(), r.out));
+  console.log('  ' + (r.text.length / 1024).toFixed(0) + ' KB');
+  console.log('  ' + r.modules + ' modules, ' + r.recipe.tiles.length + ' tile recipes, ' +
+    r.bundled.length + ' bundled level' + (r.bundled.length === 1 ? '' : 's'));
+  if (!r.bundled.length) console.log('  (no levels bundled -- players import their own)');
+}
+
+if (require.main === module) main();
+
+module.exports = { build, MODULES, VERSION, header, bootstrap };
