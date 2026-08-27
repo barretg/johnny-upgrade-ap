@@ -62,6 +62,42 @@ each of the 36 rungs above it adds exactly one item. Rung k+1 dominates rung k o
     counted in the run's summary. That is not a failure; it is a reminder that "solved" and
     "trusted" are different words.
 
+## Authoring in the map editor
+
+The seven modules here were written by hand. Everything since has a tool:
+
+- **Save selection as module...** in the editor's left panel turns whatever is
+  selected into a module file. The selection's bounding box becomes the origin,
+  `entry`/`exit` default to the leftmost and rightmost top surface, and both are
+  draggable on the canvas.
+- **Clicking a module in the panel** drops it into the map at the cursor, through
+  the same paste path the clipboard uses. The badge on the row is
+  `max(solve, handPlay)`, coloured by where the number came from, and `unsolved`
+  when there is no number at all.
+- Provenance goes in `map.meta.modules` (`{ name, x, y, minRung }`) and never into
+  a map's objects. `iniLevel()` ignores `meta`; `mapformat` forwards it whole.
+
+Two things the editor guarantees, because they are what keeps a rung honest:
+
+- **A re-save that changed nothing is byte-identical to the file on disk**,
+  including the indentation `solve-module.js --write` uses. Default-valued flags
+  are stripped and keys are written in a fixed order to make that true. So a diff
+  on a module file is always a real change to the module.
+- **A re-save that changed the geometry or the entry/exit drops `solve` and
+  `handPlay`**, and the panel says which of them it is about to drop before the
+  button is pressed. `expect` is kept either way: it is hand-written and no tool
+  can regenerate it.
+
+In the shareable userscript the library lives in localStorage instead of in this
+directory, with an **export** link per module. Nothing in a browser can solve a
+module -- the solver is node -- so one saved in the game page is an unsolved
+module until its file lands here and `solve-module.js` runs on it.
+
+`mapeditor/tools/test-geometry.js` round-trips every module in this directory
+through that path on each run: same canonical geometry, same derived entry/exit,
+same size. A change to the editor's object model that would quietly cost these
+seven modules their rungs fails there.
+
 ## Solving
 
 ```bash

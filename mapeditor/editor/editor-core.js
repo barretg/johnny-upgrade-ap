@@ -30,6 +30,9 @@
  *   vanillaMap()               -> the stock level, as a starting point (optional)
  *   tiles()                    -> [{ name, w, h }]
  *   tileImage(name)            -> Image or Canvas, drawable once ready
+ *   listModules()              -> the module library, whole records (optional)
+ *   saveModule(name, mod)      -> { ok } (optional; the panel needs both)
+ *   exportModule(name, mod)    -> hand a module out as a file (optional)
  *   play(id)                   -> run the map (optional; Play hides without it)
  *   exit()                     -> leave the editor (optional; Close hides)
  *   storageKey                 -> localStorage namespace for session state
@@ -253,6 +256,36 @@ const CSS = `
 #mde-root .help { color:#6f7688; font-size:10px; line-height:1.35; margin:1px 0 0 76px; }
 #mde-root .note { color:var(--warn); font-size:10px; line-height:1.4; background:#2a2519;
   border:1px solid #3d3520; border-radius:5px; padding:6px 7px; margin:0 0 9px; }
+/*
+ * The module library. A row is a drop target for a piece of level with a KNOWN
+ * difficulty, so the rung badge is the point of the row rather than decoration --
+ * it is coloured by where the number came from, because a solved-but-never-played
+ * module and a hand-played one are not the same claim.
+ */
+#mde-modlist { display:grid; gap:4px; }
+#mde-root .mod { background:#12141a; border:1px solid var(--line); border-radius:5px;
+  padding:5px 7px; cursor:pointer; display:grid; gap:2px; }
+#mde-root .mod:hover { border-color:var(--accent); }
+#mde-root .mod .top { display:flex; gap:6px; align-items:baseline; justify-content:space-between; }
+#mde-root .mod .nm { font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#mde-root .mod .rung { font:600 10px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  border-radius:3px; padding:0 4px; flex:none; }
+#mde-root .mod .rung.played { background:#1e3a2c; color:var(--good); }
+#mde-root .mod .rung.solved { background:#2b3346; color:var(--accent); }
+#mde-root .mod .rung.none { background:#3a2027; color:var(--bad); }
+#mde-root .mod .rung.bad { background:#3a2027; color:var(--bad); }
+#mde-root .mod .tags { color:var(--dim); font-size:9px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+#mde-root .mod .ex { background:none; border:0; color:var(--dim); font-size:9px; padding:0;
+  text-decoration:underline; cursor:pointer; }
+#mde-modpanel { position:absolute; right:10px; top:10px; width:252px; z-index:5;
+  background:#1c1f28f2; border:1px solid var(--line); border-radius:8px; padding:10px 11px;
+  display:none; }
+#mde-modpanel h3 { margin:0 0 8px; font-size:11px; text-transform:uppercase;
+  letter-spacing:.07em; color:var(--dim); }
+#mde-modpanel .pair { display:grid; grid-template-columns:40px 1fr 12px 1fr; gap:5px;
+  align-items:center; margin-bottom:5px; color:var(--dim); font-size:11px; }
+#mde-modpanel .btns { display:flex; gap:6px; margin-top:9px; }
 `;
 
 const HTML = `
@@ -288,10 +321,17 @@ const HTML = `
     <h2>Textures</h2>
     <div id="mde-palette"></div>
   </div>
+  <div class="sec" id="mde-modsec">
+    <h2>Modules</h2>
+    <div id="mde-modlist"></div>
+    <button id="mde-modsave" style="width:100%;margin-top:6px">save selection as module…</button>
+    <div class="muted" style="margin-top:5px">Click a module to drop it at the cursor.</div>
+  </div>
 </aside>
 
 <div id="mde-stage">
   <canvas id="mde-cv"></canvas>
+  <div id="mde-modpanel"></div>
   <div id="mde-hud"></div>
   <div id="mde-hint">
     <div><kbd>ctrl+click</kbd> pick object + its settings</div>
@@ -337,6 +377,8 @@ let undoStack = [], redoStack = [], clipboard = [];  // reassigned when a sessio
 let lastWorld = { x:0, y:0 };
 let dragging = null, spaceDown = false;
 let artOnTop = true;
+let moduleLib = [];   // the library as io handed it over: whole records, stale parts already gone
+let modDialog = null; // an open "save as module" dialog, with its entry/exit markers on the canvas
 let rafId = null;
 const listeners = [];   // [target, type, fn, opts], for destroy()
 
@@ -420,6 +462,19 @@ function copySel() {
 function paste() {
   if (!clipboard.length) return;
   pushHistory();
+  pasteObjects(clipboard);
+}
+/*
+ * Drop a group of loose objects into the map at the cursor.
+ *
+ * The clipboard is one caller and the module library is the other, deliberately:
+ * a module has to land with its ids allocated, its patrol ranges and trigger
+ * zones carried along and its singletons collapsed exactly as a paste does, and
+ * two code paths that did that differently would be two sets of bugs. History is
+ * the caller's job, since a module drop wants one entry covering the provenance
+ * record as well.
+ */
+function pasteObjects(clipboard) {
   let x0 = Infinity, y0 = Infinity;
   for (const c of clipboard) { x0 = Math.min(x0, c.x); y0 = Math.min(y0, c.y); }
   const dx = snap(lastWorld.x) - x0, dy = snap(lastWorld.y) - y0;
@@ -442,6 +497,458 @@ function paste() {
   });
   sel = made.map((o) => o.id);
   refresh();
+  return made;
+}
+
+// ---------------------------------------------------------------- modules
+/*
+ * A module is a piece of level with a KNOWN difficulty: geometry, an entry point,
+ * an exit point, and a rung on solver/ladder.js that a solver run and a hand-play
+ * pass agreed on. Assembling a map out of solved modules is what makes it
+ * difficulty-graded by construction, instead of needing an atlas sweep per
+ * candidate map -- which is hours times a dozen workers and therefore never
+ * happens.
+ *
+ * Three rules this end of it has to keep, all for the same reason -- stale
+ * difficulty metadata is the one thing that can silently generate an unbeatable
+ * map:
+ *
+ *   * a `solve` or `handPlay` record is DROPPED, not carried, the moment the
+ *     geometry or the entry/exit it describes changes;
+ *   * neither record is ever written into a map's objects. Provenance rides in
+ *     map.meta.modules, which mapformat forwards and iniLevel ignores;
+ *   * the number anything downstream reads is max(solve, handPlay), because a
+ *     hand-play may only ever RAISE a rung. That mirrors effectiveMinRung() in
+ *     solver/solve-module.js, which is where it is enforced loudly.
+ *
+ * Storage is io.listModules()/io.saveModule(), the same shape as the map io: on
+ * the dev server those are files in mapeditor/modules/, and in the userscript they
+ * are localStorage. Absent either one the whole panel hides -- the editor is
+ * useful without a library.
+ */
+
+/*
+ * Key-sorted stringification, byte-identical to solver/solve-module.js's
+ * `canonical`. This is how the editor decides whether a re-save still describes
+ * the same module, and the solver decides the same thing by hashing the same
+ * string -- so the two agree without the editor needing sha1 in a browser.
+ */
+function canonical(v) {
+  if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
+  if (v && typeof v === 'object') {
+    return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
+  }
+  return JSON.stringify(v === undefined ? null : v);
+}
+const geomKey = (m) => canonical({ objects: m.objects, entry: m.entry, exit: m.exit });
+
+/*
+ * The rung a module is actually worth. Mirrors effectiveMinRung() in
+ * solve-module.js: the solved rung, raised by a hand-play verdict and never
+ * lowered by one. A verdict BELOW the solved rung means a person did something
+ * the simulator proved impossible, i.e. a physics bug -- shown here as a conflict
+ * badge and refused outright by the solver, which is where refusing belongs. The
+ * editor's job is to show it, not to be the gate.
+ */
+function moduleRung(m) {
+  const solved = m && m.solve && typeof m.solve.minRung === 'number' ? m.solve.minRung : null;
+  const hand = m && m.handPlay && typeof m.handPlay.minRung === 'number' ? m.handPlay.minRung : null;
+  if (solved === null && hand === null) return { rung: null, played: false, conflict: false };
+  if (hand === null) return { rung: solved, played: false, conflict: false };
+  if (solved === null) return { rung: hand, played: true, conflict: false };
+  return { rung: Math.max(solved, hand), played: true, conflict: hand < solved };
+}
+
+/*
+ * Where a module is entered and left.
+ *
+ * Both are points on a top surface: the arena builder lines its entry and exit
+ * ledges up with them exactly, so the module is the only thing between the spawn
+ * and the coin. Leftmost surface in, rightmost surface out.
+ *
+ * Crushers are excluded because a falling slab is a hazard, not a floor. Ties on
+ * x go to the LOWEST surface, which in a corridor is the one you walk on rather
+ * than the ceiling above it -- and a module built as a corridor is exactly where
+ * the tie happens.
+ */
+function deriveEnds(list) {
+  let solid = list.filter((o) => o.kind === 'plat' && !o.stomper);
+  if (!solid.length) solid = list.filter((o) => K(o) && K(o).shape === 'rect');
+  if (!solid.length) {
+    const b = groupBox(list);
+    return b ? { entry:{ x:b.x, y:b.y }, exit:{ x:b.x + b.w, y:b.y } } : null;
+  }
+  const better = (a, b, right) => {
+    const ax = right ? a.x + a.w : a.x, bx = right ? b.x + b.w : b.x;
+    if (ax !== bx) return right ? ax > bx : ax < bx;
+    return a.y > b.y;   // the tie-break: the lower surface is the floor
+  };
+  let inO = solid[0], outO = solid[0];
+  for (const o of solid) {
+    if (better(o, inO, false)) inO = o;
+    if (better(o, outO, true)) outO = o;
+  }
+  return { entry:{ x:inO.x, y:inO.y }, exit:{ x:outO.x + outO.w, y:outO.y } };
+}
+
+/*
+ * Editor-only and default-valued fields, stripped on the way into a module file.
+ *
+ * A module is read back by solver/arena.js and handed to MapFormat.toGame, which
+ * tests these for truthiness and omits them when unset -- exactly as the vanilla
+ * map does. Writing `semi: 0` on every platform would change the module's
+ * canonical form without changing the level, and that alone would drop the solve
+ * record of every module the editor ever touched.
+ *
+ * Only these. A prop whose default is a real number -- an enemy's speed, a laser's
+ * cycle -- must survive, because toGame passes those straight through and
+ * undefined would reach the simulator.
+ */
+const MODULE_OPTIONAL = {
+  plat: ['semi', 'stomper', 'repeat'],
+  art: ['rot', 'flipX', 'flipY', 'z'],
+  door: ['open'],
+};
+const MODULE_KEY_ORDER = ['kind', 'x', 'y', 'w', 'h'];
+function stripModuleObject(o) {
+  const c = JSON.parse(JSON.stringify(o));
+  delete c.id;
+  // z on anything but a texture is an editing aid -- which of two overlapping
+  // objects is clickable -- and is not part of the level
+  if (c.kind !== 'art') delete c.z;
+  for (const f of MODULE_OPTIONAL[c.kind] || []) if (!c[f]) delete c[f];
+  /*
+   * Fixed key order, so the same module always serialises to the same bytes.
+   * Nothing depends on it for correctness -- the canonical form sorts keys -- but
+   * a module file that reshuffles itself on every save turns a no-op re-save into
+   * a whole-file diff, and then nobody reads the diffs that matter.
+   */
+  const out = {};
+  for (const k of MODULE_KEY_ORDER) if (k in c) out[k] = c[k];
+  for (const k of Object.keys(c)) if (!(k in out)) out[k] = c[k];
+  return out;
+}
+
+/*
+ * Build the module record for a selection.
+ *
+ * The origin shift goes through moveObjects(), the same one a drag uses, so a
+ * module cannot pick up a different idea of what "move this group" means than the
+ * rest of the editor -- patrol ranges, door zones, camera clamps and crusher
+ * trigger bands all travel with it.
+ */
+function buildModuleRecord(name, tags, list, entryW, exitW) {
+  const b = groupBox(list);
+  if (!b) return null;
+  const clones = list.map((o) => JSON.parse(JSON.stringify(o)));
+  moveObjects(clones, -b.x, -b.y);
+  return {
+    name,
+    version: 1,
+    tags,
+    objects: clones.map(stripModuleObject),
+    size: { w: b.w, h: b.h },
+    entry: { x: entryW.x - b.x, y: entryW.y - b.y },
+    exit: { x: exitW.x - b.x, y: exitW.y - b.y },
+  };
+}
+
+/*
+ * Merge a re-save over the library's copy of the same module.
+ *
+ * Everything a person wrote by hand and the solver cannot regenerate -- `expect`
+ * above all, which is a prediction made BEFORE the solver ever ran and is the
+ * whole value of the fixture set -- is kept. The two difficulty records are kept
+ * only while they still describe this geometry, and dropped otherwise. Dropped
+ * rather than flagged: everything downstream treats a record as an answer.
+ */
+function mergeModule(next, prev) {
+  if (prev === undefined) prev = moduleLib.find((m) => m.name === next.name);
+  if (!prev) return next;
+  const out = Object.assign({}, prev, next);
+  if (geomKey(prev) !== geomKey(next)) { delete out.solve; delete out.handPlay; }
+  return out;
+}
+
+/*
+ * Provenance, in map.meta.modules.
+ *
+ * Not in the objects: a map is played by the game, and difficulty metadata inside
+ * it would be read back as an answer by anything that opened the map -- including
+ * after someone had edited the geometry. meta rides through mapformat untouched
+ * and iniLevel ignores it, so this is a note about how the map was built and
+ * nothing more. The generator writes the same field.
+ */
+function recordModuleUse(m, box) {
+  if (!map.meta) map.meta = {};
+  if (!Array.isArray(map.meta.modules)) map.meta.modules = [];
+  map.meta.modules.push({ name: m.name, x: box.x, y: box.y, minRung: moduleRung(m).rung });
+}
+
+function dropModule(m) {
+  if (!m || !m.objects || !m.objects.length) return;
+  pushHistory();
+  const made = pasteObjects(m.objects.map((o) => Object.assign({}, o)));
+  const box = groupBox(made);
+  if (box) recordModuleUse(m, box);
+  refresh();
+}
+
+// ---------------------------------------------------------------- module panels
+function moduleSectionVisible() {
+  const sec = $('modsec');
+  if (!sec) return false;
+  const on = !!(io.listModules && io.saveModule);
+  sec.style.display = on ? '' : 'none';
+  return on;
+}
+
+async function refreshModuleList() {
+  if (!moduleSectionVisible()) return;
+  try {
+    const list = await io.listModules();
+    moduleLib = Array.isArray(list) ? list : [];
+  } catch (e) {
+    console.warn('[editor] could not read the module library', e);
+    moduleLib = [];
+  }
+  buildModuleList();
+}
+
+function buildModuleList() {
+  const el = $('modlist');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!moduleLib.length) {
+    el.innerHTML = '<span class="muted">no modules yet</span>';
+    return;
+  }
+  const sorted = [...moduleLib].sort((a, b) => {
+    const ra = moduleRung(a).rung, rb = moduleRung(b).rung;
+    if (ra === null && rb === null) return String(a.name).localeCompare(b.name);
+    if (ra === null) return 1;
+    if (rb === null) return -1;
+    return ra - rb || String(a.name).localeCompare(b.name);
+  });
+  for (const m of sorted) {
+    const r = moduleRung(m);
+    const d = document.createElement('div');
+    d.className = 'mod';
+    const top = document.createElement('div'); top.className = 'top';
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = m.name;
+    const badge = document.createElement('span'); badge.className = 'rung';
+    if (r.conflict) { badge.classList.add('bad'); badge.textContent = 'rung ' + r.rung + ' ?'; }
+    else if (r.rung === null) { badge.classList.add('none'); badge.textContent = 'unsolved'; }
+    else { badge.classList.add(r.played ? 'played' : 'solved'); badge.textContent = 'rung ' + r.rung; }
+    top.appendChild(nm); top.appendChild(badge);
+    d.appendChild(top);
+    const tags = document.createElement('div'); tags.className = 'tags';
+    tags.textContent = (m.tags || []).join(', ') +
+      (m.size ? '   ' + Math.round(m.size.w) + '\u00d7' + Math.round(m.size.h) : '');
+    d.appendChild(tags);
+    /*
+     * The badge says where the number came from, because "solved" and "trusted"
+     * are different words: the solver answers physically possible, a hand-play
+     * answers humanly executable, and only the second one has met a person.
+     */
+    d.title = m.name +
+      (r.rung === null ? '\nUNSOLVED -- no difficulty is known for this module.'
+        : r.conflict ? '\nrung ' + r.rung + ' -- CONFLICT: the hand-play verdict (' +
+            m.handPlay.minRung + ') is BELOW the solved rung (' + m.solve.minRung +
+            '). That is a physics bug, not a difficulty correction. Re-run solve-module.js.'
+        : r.played ? '\nrung ' + r.rung + ', hand-played in the real game.'
+        : '\nrung ' + r.rung + ' -- solved only: physically possible, never played by a person.') +
+      '\n\nClick to drop it at the cursor.';
+    d.onclick = () => dropModule(m);
+    if (io.exportModule) {
+      const ex = document.createElement('button');
+      ex.className = 'ex'; ex.textContent = 'export';
+      ex.onclick = (e) => { e.stopPropagation(); io.exportModule(m.name, m); };
+      d.appendChild(ex);
+    }
+    el.appendChild(d);
+  }
+}
+
+/*
+ * The save dialog.
+ *
+ * Entry and exit are derived from the selection and then left editable, as
+ * numbers in the panel and as two markers on the canvas, because the derivation
+ * is a guess about intent: leftmost and rightmost top surface is right for a gap
+ * or a ledge and wrong the moment a module is meant to be entered from elsewhere.
+ */
+function openModuleDialog() {
+  const list = selected();
+  if (!list.length) { alert('Select the objects that make up the module first.'); return; }
+  const ends = deriveEnds(list);
+  if (!ends) return;
+  modDialog = {
+    name: '', tags: '',
+    entry: { ...ends.entry }, exit: { ...ends.exit },
+    ids: list.map((o) => o.id),
+  };
+  renderModuleDialog();
+}
+function closeModuleDialog() {
+  modDialog = null;
+  const el = $('modpanel');
+  if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+}
+
+function renderModuleDialog() {
+  const el = $('modpanel');
+  if (!el) return;
+  if (!modDialog) return closeModuleDialog();
+  el.style.display = '';
+  el.innerHTML = '';
+  const h = document.createElement('h3'); h.textContent = 'Save as module';
+  el.appendChild(h);
+
+  const row = (label, value, set) => {
+    const r = document.createElement('div'); r.className = 'row2';
+    const l = document.createElement('span'); l.textContent = label;
+    const i = document.createElement('input'); i.type = 'text'; i.value = value;
+    i.oninput = () => set(i.value);
+    r.appendChild(l); r.appendChild(i);
+    el.appendChild(r);
+  };
+  row('name', modDialog.name, (v) => { modDialog.name = v; renderModuleWarning(); });
+  row('tags', modDialog.tags, (v) => { modDialog.tags = v; });
+
+  const pt = (label, which) => {
+    const r = document.createElement('div'); r.className = 'pair';
+    const l = document.createElement('span'); l.textContent = label;
+    const mk = (axis) => {
+      const i = document.createElement('input'); i.type = 'text';
+      i.style.cssText = 'width:100%;background:#12141a;border:1px solid #2c3040;color:#dde1ea;' +
+        'border-radius:4px;padding:3px 5px;font:inherit;font-size:11px';
+      i.value = String(Math.round(modDialog[which][axis]));
+      i.oninput = () => { const n = Number(i.value); if (i.value !== '' && !isNaN(n)) { modDialog[which][axis] = n; renderModuleWarning(); } };
+      i.dataset.mod = which + axis;
+      return i;
+    };
+    const ys = document.createElement('span'); ys.textContent = 'y';
+    r.appendChild(l); r.appendChild(mk('x')); r.appendChild(ys); r.appendChild(mk('y'));
+    el.appendChild(r);
+  };
+  pt('entry x', 'entry');
+  pt('exit x', 'exit');
+
+  const note = document.createElement('div');
+  note.className = 'note';
+  note.textContent = 'Entry and exit are points on a top surface, and the arena builder puts a ' +
+    'ledge flush with each. Drag the green and red markers on the canvas, or type them here. ' +
+    'The exit must be right of the entry: arenas run left to right.';
+  el.appendChild(note);
+
+  const warn = document.createElement('div');
+  warn.id = 'mde-modwarn';
+  el.appendChild(warn);
+
+  const btns = document.createElement('div'); btns.className = 'btns';
+  const ok = document.createElement('button'); ok.className = 'primary'; ok.textContent = 'save module';
+  ok.onclick = saveModuleNow;
+  const no = document.createElement('button'); no.textContent = 'cancel';
+  no.onclick = closeModuleDialog;
+  btns.appendChild(ok); btns.appendChild(no);
+  el.appendChild(btns);
+  renderModuleWarning();
+}
+
+/*
+ * Say up front what a save is about to throw away.
+ *
+ * Overwriting a module whose geometry has changed drops its solve record AND its
+ * hand-play verdict -- the second of which cost somebody a play session -- so that
+ * has to be visible before the button is pressed, not discovered afterwards.
+ */
+function renderModuleWarning() {
+  const el = root && root.querySelector('#mde-modwarn');
+  if (!el || !modDialog) return;
+  el.innerHTML = '';
+  const name = moduleName(modDialog.name);
+  const prev = name && moduleLib.find((m) => m.name === name);
+  if (!prev) return;
+  const next = pendingModuleRecord();
+  const same = next && geomKey(prev) === geomKey(next);
+  const had = [prev.solve && 'its solve record', prev.handPlay && 'its hand-play verdict']
+    .filter(Boolean).join(' and ');
+  const d = document.createElement('div');
+  d.className = 'note';
+  d.textContent = same
+    ? 'Overwrites "' + name + '". Same geometry, so ' + (had || 'nothing') + ' is kept.'
+    : 'Overwrites "' + name + '" with DIFFERENT geometry' +
+      (had ? ', which drops ' + had + '.' : '.');
+  el.appendChild(d);
+}
+
+const moduleName = (s) => String(s || '').trim().toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64);
+
+function pendingModuleRecord() {
+  if (!modDialog) return null;
+  const list = modDialog.ids.map(byId).filter(Boolean);
+  if (!list.length) return null;
+  const tags = modDialog.tags.split(',').map((t) => t.trim()).filter(Boolean);
+  return buildModuleRecord(moduleName(modDialog.name), tags, list, modDialog.entry, modDialog.exit);
+}
+
+async function saveModuleNow() {
+  const name = moduleName(modDialog && modDialog.name);
+  if (!name) { alert('The module needs a name.'); return; }
+  const rec = pendingModuleRecord();
+  if (!rec) { alert('The objects that were selected are gone.'); return; }
+  if (rec.exit.x <= rec.entry.x) {
+    alert('The exit must be right of the entry: arenas run left to right, and solver/arena.js ' +
+          'refuses a module that does not.');
+    return;
+  }
+  const full = mergeModule(rec);
+  let ok = false;
+  try {
+    const r = await io.saveModule(name, full);
+    ok = !!(r && r.ok);
+  } catch (e) { console.error('[editor] module save failed', e); }
+  if (!ok) { alert('Could not save the module.'); return; }
+  closeModuleDialog();
+  await refreshModuleList();
+}
+
+/*
+ * The two markers, drawn only while the dialog is open. Same grab radius as every
+ * other handle, and tested BEFORE the object handles so a marker sitting on a
+ * platform corner is still reachable.
+ */
+function modMarkerAt(sx, sy) {
+  if (!modDialog) return null;
+  for (const which of ['entry', 'exit']) {
+    const p = modDialog[which];
+    if (Math.abs(sx - (p.x * view.z + view.x)) <= HANDLE / 2 + 5 &&
+        Math.abs(sy - (p.y * view.z + view.y)) <= HANDLE / 2 + 5) return which;
+  }
+  return null;
+}
+function drawModuleMarkers() {
+  if (!modDialog) return;
+  const list = modDialog.ids.map(byId).filter(Boolean);
+  const b = groupBox(list);
+  if (b) {
+    ctx.strokeStyle = '#64d19a';
+    ctx.lineWidth = 2 / view.z;
+    ctx.setLineDash([12 / view.z, 7 / view.z]);
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.setLineDash([]);
+  }
+  const label = (p, text, color) => {
+    ctx.fillStyle = color;
+    ctx.font = (12 / view.z) + 'px ui-sans-serif,system-ui,sans-serif';
+    ctx.fillText(text, p.x + 10 / view.z, p.y - 10 / view.z);
+  };
+  circ(modDialog.entry, HANDLE + 6, '#64d19a', '#0d0f14');
+  label(modDialog.entry, 'entry', '#64d19a');
+  circ(modDialog.exit, HANDLE + 6, '#e07a7a', '#0d0f14');
+  label(modDialog.exit, 'exit', '#e07a7a');
 }
 
 // ---------------------------------------------------------------- game format
@@ -898,6 +1405,7 @@ function draw() {
   for (const o of s) drawSelection(o);
   if (s.length > 1) drawGroup(s);
   if (dragging && dragging.marquee) drawMarquee(dragging);
+  drawModuleMarkers();
 }
 
 function drawGrid() {
@@ -1219,6 +1727,10 @@ function pick(o, additive) {
 function onMouseDown(e) {
   const p = stagePos(e);
   const w = toWorld(p.x, p.y);
+  // an open module dialog owns its two markers ahead of everything else on the
+  // canvas -- they routinely sit exactly on a platform corner
+  const mm = spaceDown ? null : modMarkerAt(p.x, p.y);
+  if (mm) { dragging = { modPt: mm }; return; }
   const h = spaceDown ? null : handleAt(p.x, p.y);
   if (h) {
     armHistory();
@@ -1310,7 +1822,16 @@ function onMouseMove(e) {
   hud(w);
   if (!dragging) return;
   const p = stagePos(e);
-  if (dragging.pan) {
+  if (dragging.modPt) {
+    if (!modDialog) return;
+    modDialog[dragging.modPt] = { x: snap(w.x), y: snap(w.y) };
+    // the panel shows the same value, so it has to move with the marker
+    const fx = root.querySelector('[data-mod="' + dragging.modPt + 'x"]');
+    const fy = root.querySelector('[data-mod="' + dragging.modPt + 'y"]');
+    if (fx) fx.value = String(modDialog[dragging.modPt].x);
+    if (fy) fy.value = String(modDialog[dragging.modPt].y);
+    renderModuleWarning();
+  } else if (dragging.pan) {
     view.x = dragging.vx + (p.x - dragging.sx);
     view.y = dragging.vy + (p.y - dragging.sy);
   } else if (dragging.marquee) {
@@ -1466,7 +1987,7 @@ function onKeyDown(e) {
     if (k === 'v') { paste(); e.preventDefault(); return; }
   }
   if (/^Arrow/.test(e.key) && !e.repeat && s.length) pushHistory();
-  if (e.key === 'Escape') { setTool('select'); }
+  if (e.key === 'Escape') { if (modDialog) closeModuleDialog(); else setTool('select'); }
   else if (e.key === 'Delete' || e.key === 'Backspace') {
     pushHistory();
     map.objects = map.objects.filter((o) => !sel.includes(o.id)); sel = []; refresh(); e.preventDefault();
@@ -1947,7 +2468,12 @@ async function save() {
   const name = ($('mapName').value || 'untitled').trim();
   const id = name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64) || 'untitled';
   const g = toGame();
-  g.meta = { id, name };
+  /*
+   * Merge rather than replace. meta carries map.meta.modules -- which modules a
+   * map was assembled from, and at which rung -- and rebuilding meta from just
+   * the id and the name silently threw that away on every save.
+   */
+  g.meta = Object.assign({}, map.meta, { id, name });
   const btn = $('save');
   let ok = false;
   try {
@@ -2013,6 +2539,16 @@ async function boot() {
   };
   $('save').onclick = save;
 
+  /*
+   * The module library. Optional, like play and export: an io with no module
+   * storage hides the panel rather than showing a dead one.
+   */
+  const modSave = $('modsave');
+  if (moduleSectionVisible()) {
+    modSave.onclick = openModuleDialog;
+    await refreshModuleList();
+  }
+
   // Play always saves first. The runner reads the map back out, so running a
   // stale copy of what is on screen would be worse than a moment of delay.
   const play = $('play');
@@ -2036,7 +2572,7 @@ async function boot() {
       const name = ($('mapName').value || 'untitled').trim();
       const id = name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,64) || 'untitled';
       const g = toGame();
-      g.meta = { id, name, modified: new Date().toISOString() };
+      g.meta = Object.assign({}, map.meta, { id, name, modified: new Date().toISOString() });
       io.exportMap(id, g);
     };
   } else exp.style.display = 'none';
@@ -2157,9 +2693,18 @@ function mount(opts) {
 return {
   mount, KINDS,
   _geom: { rotate90, scaleObj, rotateSelection, clampBox, laserRect, groupBox, moveObjects, bounds },
+  /*
+   * The module half, exported for the same reason: a module that does not survive
+   * a trip through the editor loses its solve record and its hand-play verdict,
+   * and nothing on screen would say so. tools/test-geometry.js round-trips the
+   * whole library through these.
+   */
+  _module: { canonical, geomKey, moduleRung, deriveEnds, stripModuleObject,
+             buildModuleRecord, mergeModule, MODULE_OPTIONAL },
   // read-only view of the live state, for driving the editor from a test page:
   // handle positions are in world space and the tests need the same transform
   // the canvas uses, which no amount of reading the panels recovers exactly
-  _state: () => ({ view, grid, tool, sel: sel.slice(), objects: map.objects, handleAt, bounds }),
+  _state: () => ({ view, grid, tool, sel: sel.slice(), objects: map.objects, meta: map.meta,
+                   modules: moduleLib, dialog: modDialog, handleAt, bounds }),
 };
 }));

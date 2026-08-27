@@ -23,6 +23,21 @@
 const log = [];
 const ok = (cond, m, extra) => log.push((cond ? 'ok   ' : 'FAIL ') + m + (extra !== undefined ? '  [' + extra + ']' : ''));
 
+/*
+ * One module in the library, carrying both difficulty records, so the panel has
+ * something to drop and "does a round trip keep the rung" has an answer to check.
+ * saveModule keeps the last record it was handed rather than writing anything.
+ */
+const MODFIX = {
+  name: 'stub-gap', version: 1, tags: ['gap', 'jump'],
+  objects: [ { kind:'plat', x:0, y:0, w:600, h:400 }, { kind:'plat', x:900, y:0, w:600, h:400 } ],
+  size: { w:1500, h:400 }, entry: { x:0, y:0 }, exit: { x:1500, y:0 },
+  expect: { minRung: 8 },
+  solve: { hash:'aaaa', minRung: 8, frames: 120 },
+  handPlay: { hash:'bbbb', minRung: 12, why: 'played' },
+};
+let savedModule = null;
+
 const io = {
   storageKey: 'harness',
   listMaps: async () => [],
@@ -30,6 +45,8 @@ const io = {
   saveMap: async () => ({ ok: true }),
   tiles: async () => [],
   tileImage: () => null,
+  listModules: async () => [JSON.parse(JSON.stringify(MODFIX))],
+  saveModule: async (name, m) => { savedModule = m; return { ok: true, name }; },
 };
 MapEditor.mount({ root: document.getElementById('host'), io });
 
@@ -196,6 +213,85 @@ function run() {
   for (let i = 0; i < 60; i++) document.dispatchEvent(new KeyboardEvent('keydown', { key:'z', ctrlKey:true, bubbles:true }));
   ok(S().objects.length <= n0, 'ctrl+z runs without throwing', S().objects.length + ' of ' + n0);
 
+  modules();
+}
+
+/*
+ * The library end of it.
+ *
+ * A module is a piece of level with a KNOWN difficulty, so what is worth testing
+ * is not that objects appear -- it is that dropping one and saving it straight
+ * back gives the same module, records and all. A round trip that quietly changed
+ * the geometry would drop the solve record and the hand-play verdict, and nothing
+ * on screen would say so.
+ *
+ * Last, and asynchronous, because saving goes through an async io: the two
+ * timeouts are waiting on that promise, not on anything being drawn.
+ */
+function modules() {
+  deselect();
+  const modRow = document.querySelectorAll('#mde-modlist .mod')[0];
+  ok(!!modRow, 'the module panel lists the library');
+  ok(modRow && /rung 12/.test(modRow.textContent),
+     'the badge shows max(solve, handPlay), not the solved rung',
+     modRow && modRow.textContent.replace(/\s+/g, ' '));
+
+  ev('mousemove', 620, 480);
+  const nBefore = S().objects.length;
+  modRow.click();
+  const drop = S().sel.map((id) => S().objects.find((o) => o.id === id));
+  ok(S().objects.length === nBefore + 2, 'clicking a module drops it at the cursor',
+     S().objects.length - nBefore);
+  ok(drop.length === 2 && drop.every((o) => o && o.id),
+     'the dropped objects got ids through the paste path');
+  const prov = (S().meta.modules || [])[0];
+  ok(prov && prov.name === 'stub-gap' && prov.minRung === 12,
+     'provenance lands in map.meta.modules', prov && JSON.stringify(prov));
+  ok(!S().objects.some((o) => o.solve || o.minRung),
+     'and no difficulty metadata is written into an object');
+
+  q('modsave').click();
+  ok(q('modpanel').style.display !== 'none', 'save-as-module opens its panel');
+  const db = box(drop);
+  const dlg = S().dialog;
+  ok(dlg && dlg.entry.x === db.x && dlg.entry.y === db.y &&
+     dlg.exit.x === db.x + db.w && dlg.exit.y === db.y,
+     'entry and exit derive to the leftmost and rightmost top surface',
+     dlg && JSON.stringify([dlg.entry, dlg.exit]));
+
+  saveDialogAs('stub-gap');
+  setTimeout(() => {
+    ok(savedModule && JSON.stringify(savedModule.objects) === JSON.stringify(MODFIX.objects),
+       'a drop and a save give back the same geometry, at the origin',
+       savedModule && JSON.stringify(savedModule.objects));
+    ok(savedModule && JSON.stringify([savedModule.entry, savedModule.exit]) ===
+       JSON.stringify([MODFIX.entry, MODFIX.exit]), 'and the same entry and exit');
+    ok(savedModule && !!savedModule.solve && !!savedModule.handPlay,
+       'so both difficulty records survive the round trip');
+
+    // now move one of the platforms, and both records have to go
+    savedModule = null;
+    drop[1].x += 300;
+    q('modsave').click();
+    saveDialogAs('stub-gap');
+    setTimeout(() => {
+      ok(savedModule && !savedModule.solve && !savedModule.handPlay,
+         'changed geometry drops the solve record and the hand-play verdict');
+      ok(savedModule && !!savedModule.expect,
+         'but keeps expect, which is hand-written and cannot be regenerated');
+      finish();
+    }, 20);
+  }, 20);
+}
+
+function saveDialogAs(name) {
+  const field = q('modpanel').querySelectorAll('input')[0];
+  field.value = name;
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  q('modpanel').querySelector('button.primary').click();
+}
+
+function finish() {
   document.getElementById('out').textContent = log.join('\n');
 }
 

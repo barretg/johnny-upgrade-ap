@@ -157,7 +157,14 @@
     (g.art || []).forEach((a) => add('art', Object.assign({}, a)));
 
     return {
-      meta: { id: (g.meta && g.meta.id) || '', name: (g.meta && g.meta.name) || 'Untitled' },
+      /*
+       * meta comes back WHOLE, not rebuilt from the id and the name. toGame
+       * forwards whatever is in it -- the map editor records which modules a map
+       * was assembled from in meta.modules -- and reading a map in and writing it
+       * straight back out must not lose that. iniLevel ignores meta entirely.
+       */
+      meta: Object.assign({}, g.meta,
+        { id: (g.meta && g.meta.id) || '', name: (g.meta && g.meta.name) || 'Untitled' }),
       objects,
       yEnd: g.yEnd === undefined ? 3000 : g.yEnd,
       nextId: id,

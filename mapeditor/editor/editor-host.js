@@ -15,6 +15,9 @@
  *   play      hand the map to the runtime and start it, in place
  *   export    a downloaded .json, because a browser with no server behind it
  *             otherwise has no way to hand a level to anyone
+ *   modules   localStorage again, and export per module: nothing in a browser
+ *             can SOLVE one, so a module saved here is unsolved until its file
+ *             reaches solver/solve-module.js
  *
  * Nothing here is Archipelago-aware, and nothing in mapkit depends on it: this
  * is authoring tooling that happens to run in the same page.
@@ -26,6 +29,7 @@
   'use strict';
 
   const STORE = 'mapkit-imported';
+  const MODULE_STORE = 'mapkit-modules';
   const TILE_PREFIX = 'mkTile_';
 
   function readStore() {
@@ -46,6 +50,32 @@
        */
       alert('Could not save the level: ' + e.message +
             '\n\nUse Export to write it out as a file before you lose it.');
+      return false;
+    }
+  }
+
+  /*
+   * The module library, in the page.
+   *
+   * Nothing here can solve a module -- the solver is node -- so a module saved in
+   * the game page is an UNSOLVED one until its file reaches solver/solve-module.js.
+   * That is exactly how the badge reads it: `solve` is a record this side never
+   * writes, only carries. Which is also why export exists per module rather than
+   * only per map: without a server, a module saved here would otherwise be stuck
+   * in one browser profile and could never be solved at all.
+   */
+  function readModules() {
+    try {
+      const raw = localStorage.getItem(MODULE_STORE);
+      const list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (e) { return []; }
+  }
+  function writeModules(list) {
+    try { localStorage.setItem(MODULE_STORE, JSON.stringify(list)); return true; }
+    catch (e) {
+      alert('Could not save the module: ' + e.message +
+            '\n\nExport it as a file before you lose it.');
       return false;
     }
   }
@@ -153,6 +183,21 @@
 
       exportMap(id, gameMap) {
         download(id + '.json', JSON.stringify(gameMap, null, 2) + '\n');
+      },
+
+      listModules() { return readModules(); },
+
+      saveModule(name, mod) {
+        const list = readModules();
+        const at = list.findIndex((m) => m.name === name);
+        if (at >= 0) list[at] = mod; else list.push(mod);
+        return writeModules(list) ? { ok: true, name } : { ok: false };
+      },
+
+      // one indentation apart from the server's writer, deliberately: this is the
+      // file that gets dropped into mapeditor/modules/ and solved
+      exportModule(name, mod) {
+        download(name + '.json', JSON.stringify(mod, null, 1) + '\n');
       },
 
       exit() { if (hooks.onExit) hooks.onExit(); },

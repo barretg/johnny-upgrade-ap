@@ -50,3 +50,58 @@ eq(back, [[240,0],[590,1]], 'laser round trip');
 const stock = M.fromGame({ plats:[], lasers:[{x:0,y:0},{x:1,y:1}] }, 1).objects
   .filter(o => o.kind === 'laser').map(o => [o.length, o.horizontal]);
 eq(stock, [[590,1],[180,0]], 'legacy lasers default to what iniLevel did');
+
+// ---------------------------------------------------------------- modules
+/*
+ * The module library survives a trip through the editor.
+ *
+ * This is the one that matters for difficulty: a module dropped from the palette
+ * and saved straight back out must come out with the SAME canonical geometry, or
+ * mergeModule drops its solve record and its hand-play verdict -- a rung that cost
+ * somebody a play session, thrown away by an edit that changed nothing. The
+ * fixture is the real library, so a change to the editor's object model that
+ * quietly alters what a module serialises to fails here rather than in a badge.
+ *
+ * The drop is modelled as it really happens: the objects come back with editor ids
+ * and the kind's default props attached, exactly as paste() and the properties
+ * panel leave them.
+ */
+const fs = require('fs');
+const path = require('path');
+const mod = E._module;
+const MODDIR = path.join(__dirname, '..', 'modules');
+
+for (const f of fs.readdirSync(MODDIR).filter((n) => n.endsWith('.json'))) {
+  const src = JSON.parse(fs.readFileSync(path.join(MODDIR, f), 'utf8'));
+  let id = 1;
+  // what the palette drop leaves in the map: an id, and every prop the kind
+  // defines, whether the file mentioned it or not
+  const dropped = src.objects.map((o) =>
+    Object.assign({ id: id++, kind: o.kind, w: 0, h: 0 }, E.KINDS[o.kind].props || {}, o));
+  // the module is dropped somewhere in the map, not at the origin
+  g.moveObjects(dropped, 1700, -240);
+
+  const ends = mod.deriveEnds(dropped);
+  const derived = {
+    entry: { x: ends.entry.x - 1700, y: ends.entry.y + 240 },
+    exit: { x: ends.exit.x - 1700, y: ends.exit.y + 240 },
+  };
+  eq([derived.entry, derived.exit], [src.entry, src.exit], 'entry/exit derived: ' + src.name);
+
+  const rec = mod.buildModuleRecord(src.name, src.tags, dropped, ends.entry, ends.exit);
+  eq(mod.geomKey(rec), mod.geomKey(src), 'geometry round trip: ' + src.name);
+  eq(rec.size, src.size, 'size round trip: ' + src.name);
+}
+
+// a hand-play verdict raises the rung; it never lowers it, and a verdict below the
+// solved rung is a physics bug rather than a difficulty correction
+eq(mod.moduleRung({ solve:{minRung:12} }), { rung:12, played:false, conflict:false }, 'rung: solved only');
+eq(mod.moduleRung({ solve:{minRung:12}, handPlay:{minRung:22} }), { rung:22, played:true, conflict:false }, 'rung: hand-play raises');
+eq(mod.moduleRung({ solve:{minRung:12}, handPlay:{minRung:5} }), { rung:12, played:true, conflict:true }, 'rung: hand-play below solve is a conflict, not a lowering');
+eq(mod.moduleRung({}), { rung:null, played:false, conflict:false }, 'rung: unsolved');
+
+// default-valued flags are stripped, real numbers are not
+eq(mod.stripModuleObject({ id:3, kind:'plat', x:0, y:0, w:10, h:10, semi:0, stomper:0, z:2 }),
+   { kind:'plat', x:0, y:0, w:10, h:10 }, 'strip: default plat flags and the editing-only z');
+eq(mod.stripModuleObject({ id:4, kind:'ene', x:0, y:0, w:0, h:0, typ:'robot', xx:0, yy:0 }),
+   { kind:'ene', x:0, y:0, w:0, h:0, typ:'robot', xx:0, yy:0 }, 'strip: an enemy keeps a speed of zero');

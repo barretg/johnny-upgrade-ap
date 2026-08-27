@@ -271,8 +271,9 @@ object:
 
 ```
 editor/editor-core.js   the editor. Shared verbatim by both hosts.
-editor/index.html       host 1: the dev server. Maps are files, textures are
-                        PNGs from tiles/extracted/, Play opens /play.
+editor/index.html       host 1: the dev server. Maps are files, modules are
+                        files in modules/, textures are PNGs from
+                        tiles/extracted/, Play opens /play.
 editor/editor-host.js   host 2: inside the game page. Maps live in
                         localStorage, textures come from the canvases mapkit
                         rebuilt out of the player's own artwork, Play hands the
@@ -334,6 +335,74 @@ wrong in the level.
 - **The coordinate readout** sits bottom left and follows the mouse whether or
   not anything is being dragged; with a grid set it also shows where the next
   click would land.
+- **Module entry/exit markers** -- while the save-as-module panel is open, two
+  round markers sit on the canvas. They are hit-tested *before* every other
+  handle, because they routinely land exactly on a platform corner.
+
+## The module library
+
+A **module** is a piece of level with a known difficulty: geometry, an entry
+point, an exit point and a rung on `solver/ladder.js`. Assembling a map out of
+solved modules is what makes it difficulty-graded *by construction*, instead of
+needing an atlas sweep per candidate map -- which is hours times a dozen workers,
+and therefore never happens. `modules/README.md` is the format and the solving
+side; this is the authoring side.
+
+The left panel lists the library, lowest rung first, and the badge is the point
+of the row:
+
+| badge | means |
+|---|---|
+| `rung 12` green | hand-played in the real game at that rung |
+| `rung 12` blue | solved only -- physically possible, never played by a person |
+| `unsolved` red | no difficulty is known; the generator cannot use it |
+| `rung 12 ?` red | the hand-play verdict is **below** the solved rung, which is a physics bug rather than a difficulty correction |
+
+Clicking a row drops that module at the cursor, through the same `paste()` path
+the clipboard uses -- so ids, patrol ranges, trigger zones and singletons behave
+exactly as they do for a copy. **Save selection as module...** does the reverse:
+the selection's bounding box becomes the origin, entry and exit default to the
+leftmost and rightmost top surface, and both are draggable on the canvas (green
+and red) or typeable in the panel.
+
+Three rules hold this together, all of them the same rule -- **stale difficulty
+metadata is the one thing that can silently generate an unbeatable map**:
+
+- A `solve` record or a `handPlay` verdict is **dropped, not carried**, the moment
+  the geometry or the entry/exit it describes changes. The panel says so before
+  the save, because a hand-play verdict cost somebody a play session. Everything
+  a tool cannot regenerate -- `expect` above all, which is a prediction written
+  *before* the solver ever ran -- is kept either way.
+- Neither record is ever written into a map's objects. Provenance rides in
+  `map.meta.modules` as `{ name, x, y, minRung }`, which `mapformat` forwards and
+  `iniLevel()` ignores.
+- The number anything downstream reads is `max(solve, handPlay)`, because a
+  hand-play may only ever **raise** a rung. That mirrors `effectiveMinRung()` in
+  `solver/solve-module.js`, which is where a verdict below the solved rung is
+  refused loudly. The editor shows the conflict; it is not the gate.
+
+Whether a stored record still describes its module is decided by the *canonical*
+form of `{objects, entry, exit}` -- key-sorted, byte-identical to the string
+`solve-module.js` hashes -- so the two sides agree without the editor needing
+sha1 in a browser. Two consequences worth knowing:
+
+- Default-valued flags (`semi: 0`, `stomper: 0`, an `art` object's `rot`/`flip`/`z`)
+  are stripped on the way out, and object keys are written in a fixed order.
+  Without that, a module that had merely been opened would serialise differently
+  and lose its rung. A prop whose default is a real number -- an enemy's speed, a
+  laser's cycle -- is **not** stripped: `toGame` passes those straight through and
+  `undefined` would reach the simulator.
+- A no-op re-save is byte-identical to the file on disk, matching
+  `solve-module.js --write`'s own formatting, so a real diff is always a real
+  change.
+
+Storage is `io.listModules()` / `io.saveModule()`, alongside the map io. On the
+dev server those are the files in `mapeditor/modules/`, served through the
+solver's own `readModule()` so a record that has gone stale is already gone
+before it reaches a badge. In the userscript they are localStorage, plus an
+**export** link per module -- nothing in a browser can *solve* a module, so one
+saved in the game page stays unsolved until its file reaches
+`solver/solve-module.js`.
 
 ## Runtime architecture
 
@@ -414,10 +483,17 @@ node mapeditor/tools/e2e/server.js           # the shipped userscript + the game
   a map is already broken: four quarter turns must be the identity for every
   kind, a resize must carry patrol ranges and camera clamps along, and a laser
   must survive the round trip through the game's format.
+  It also round-trips **the real module library**: every module in
+  `mapeditor/modules/` is dropped as the palette drops it (ids and default props
+  attached), saved back, and checked for identical canonical geometry and
+  identical derived entry/exit. A change to the object model that quietly alters
+  what a module serialises to fails here, rather than by silently dropping a rung
+  that a person spent a play session establishing.
 - **uicheck.html** drives the editor itself with synthetic mouse events -- handle
   hit-testing, beam dragging, clamp switching, group rotate/resize, group
-  snapping, the coordinate readout. Open it in a browser, or dump the DOM
-  headless and read the panel it prints. It needs no server and no tiles.
+  snapping, the coordinate readout, and the module drop/save round trip with its
+  difficulty records. Open it in a browser, or dump the DOM headless and read the
+  panel it prints. It needs no server and no tiles.
 - **e2e/** runs the built `dist/*.user.js` against the real SDK in a real
   browser, the way Tampermonkey would, and drives the whole loop: level select ->
   editor -> save -> play -> back to the editor. See the comment at the top of

@@ -46,6 +46,24 @@ const io = {
   async vanillaMap() {
     return (await fetch('/api/vanilla')).json();
   },
+
+  /*
+   * The module library is files in mapeditor/modules/, the same ones
+   * solver/solve-module.js reads and writes. The server serves them through the
+   * solver's own reader, so a solve record that no longer describes its module has
+   * already been dropped by the time it reaches a badge here.
+   */
+  async listModules() {
+    return (await fetch('/api/modules')).json();
+  },
+  async saveModule(name, mod) {
+    const r = await fetch('/api/module/' + encodeURIComponent(name), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mod),
+    });
+    return r.json();
+  },
   async tiles() {
     const st = await (await fetch('/api/state')).json();
     return st.tiles;

@@ -41,6 +41,7 @@ const ROOT = path.join(__dirname, '..');
 const SDK = arg('--sdk', 'JU_SDK', path.join(ROOT, '..', 'scratch-work', 'johnny-upgrade-sdk'));
 const TILES = path.join(ROOT, 'tiles', 'extracted');
 const MAPS = path.join(ROOT, 'maps');
+const MODULES = path.join(ROOT, 'modules');
 
 const send = (res, code, type, body) => {
   res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
@@ -71,6 +72,50 @@ function listMaps() {
     } catch (e) { /* leave the defaults; a broken map should still be listed */ }
     return { id, name, modified, thumb: fs.existsSync(path.join(MAPS, id + '.png')) };
   }).sort((a, b) => (b.modified || '').localeCompare(a.modified || ''));
+}
+
+/*
+ * The module library.
+ *
+ * Read through the solver's own readModule(), not with JSON.parse, so the editor is
+ * handed exactly what solve-module.js would be handed: a `solve` record whose
+ * geometry or settings have moved on is DROPPED before it ever reaches a badge,
+ * and so is a `handPlay` verdict whose geometry has. Two readers with two ideas of
+ * when a record is stale is how a rung that no longer describes anything ends up
+ * on screen -- and stale difficulty metadata is the one thing that can silently
+ * generate an unbeatable map.
+ *
+ * The solver is a sibling directory rather than a dependency, so its absence
+ * degrades to a plain read instead of taking the editor down with it.
+ */
+function moduleReader() {
+  try {
+    const sm = require(path.join(ROOT, '..', 'solver', 'solve-module.js'));
+    const settings = require(path.join(ROOT, '..', 'solver', 'settings.js'));
+    return (f) => sm.readModule(f, settings);
+  } catch (e) {
+    console.log('  ! no solver alongside; module records are served unchecked (' + e.message + ')');
+    return (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
+  }
+}
+
+function listModules() {
+  if (!fs.existsSync(MODULES)) return [];
+  const read = moduleReader();
+  return fs.readdirSync(MODULES).filter((f) => f.endsWith('.json')).map((f) => {
+    const file = path.join(MODULES, f);
+    let mod;
+    try { mod = read(file); }
+    catch (e) { return { name: f.replace(/\.json$/, ''), objects: [], error: e.message }; }
+    // readModule's own bookkeeping is not part of the record
+    for (const k of ['file', 'hash', 'geometryHash']) delete mod[k];
+    if (mod.staleSolve || mod.staleHandPlay) mod.stale = true;
+    delete mod.staleSolve; delete mod.staleHandPlay;
+    if (!mod.solve) delete mod.solve;
+    if (!mod.handPlay) delete mod.handPlay;
+    if (!mod.name) mod.name = f.replace(/\.json$/, '');
+    return mod;
+  }).sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
 /*
@@ -132,6 +177,28 @@ const server = http.createServer(async (req, res) => {
       console.log('saved map ' + id + (data.thumb ? ' (+thumbnail)' : ''));
       return json(res, 200, { ok: true, id });
     }
+
+    /*
+     * Modules are written with the same shape and indentation solve-module.js
+     * uses, because that tool rewrites these files too -- matching it keeps a
+     * --write pass from showing up as a whole-file diff.
+     */
+    if (req.method === 'POST' && p.startsWith('/api/module/')) {
+      const name = p.slice('/api/module/'.length);
+      if (!safeId(name)) return json(res, 400, { error: 'bad module name' });
+      const mod = JSON.parse(await body(req));
+      if (!mod || !Array.isArray(mod.objects) || !mod.entry || !mod.exit) {
+        return json(res, 400, { error: 'a module needs objects, entry and exit' });
+      }
+      mod.name = name;
+      fs.mkdirSync(MODULES, { recursive: true });
+      fs.writeFileSync(path.join(MODULES, name + '.json'), JSON.stringify(mod, null, 1) + '\n');
+      console.log('saved module ' + name + ' (' + mod.objects.length + ' objects' +
+        (mod.solve ? ', solve kept' : '') + (mod.handPlay ? ', hand-play kept' : '') + ')');
+      return json(res, 200, { ok: true, name });
+    }
+
+    if (p === '/api/modules') return json(res, 200, listModules());
 
     if (p === '/' || p === '/index.html') {
       return send(res, 200, 'text/html; charset=utf-8', fs.readFileSync(path.join(__dirname, 'index.html')));
@@ -244,6 +311,7 @@ server.listen(PORT, HOST, () => {
   console.log('  level list /game');
   console.log('  tiles:     ' + TILES);
   console.log('  maps:      ' + MAPS);
+  console.log('  modules:   ' + MODULES);
   console.log('  sdk:       ' + SDK);
 
   if (HOST !== '127.0.0.1' && HOST !== 'localhost') {
