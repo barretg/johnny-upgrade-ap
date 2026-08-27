@@ -1,5 +1,6 @@
 .claude
 .vexp
+.vscode
 CLAUDE.md
 *__pycache__
 scratch-work
