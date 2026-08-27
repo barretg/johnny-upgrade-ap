@@ -40,6 +40,9 @@ const DEFAULTS = {
   spikeHeight: 60,
   coinOffsetX: 150, // how far along the exit ledge the coin sits
   coinOffsetY: 45,
+  park: 4000, // how far outside the box the vanilla singletons are parked
+  spikeTile: 'hazard_surface', // 120x80 in the mural
+  spikeTileW: 120,
 };
 
 /**
@@ -127,6 +130,64 @@ function buildArena(mod, opts = {}) {
     ymin: 0,
     ymax: 0,
   });
+
+  /*
+   * Park the vanilla singletons somewhere unreachable.
+   *
+   * A map that states no door still gets one: iniLevel does
+   * `game.door = isprt.create(ldat.door.l, ldat.door.t, "door")` unconditionally, so an omitted
+   * door is a door at world (0, 0). Likewise an omitted bossData is not "no boss zones", it is
+   * two zero rects at the origin -- and bossSleep() hit-tests them every frame. sprtHitTest
+   * against {0,0,0,0} is true whenever the player straddles x = 0 with his feet between y = 0
+   * and y = 90, and the payoff is `sprt.noControl = true; sprt.xx = 7`: control taken away and a
+   * railroaded run into a boss fight.
+   *
+   * That is not hypothetical for modules. The storage convention normalises a module's bounding
+   * box to the origin, so a module whose entry sits at (0, 0) puts the player within a pixel of
+   * that box on every run. Giving all three real positions well outside the sealed walls costs
+   * nothing and removes the whole class.
+   *
+   * The boss SPRITE cannot be moved this way -- iniBoss hardcodes (2635, 2592) and bossData.range
+   * only bounds its movement -- but it is created with no collision bounds, and every hit test
+   * against undefined bounds is false, so it stays inert decoration unless the fight starts. With
+   * the gate parked out here, it cannot.
+   */
+  const parkX = xMin - o.wall - o.park;
+  const parkY = yBot + o.park;
+  out.push({ kind: 'door', x: parkX, y: parkY, w: 100, h: 250, trigger: 'never' });
+  out.push({ kind: 'bossGate', x: parkX, y: parkY - 400, w: 100, h: 200 });
+  out.push({ kind: 'bossRange', x: parkX + 200, y: parkY - 400, w: 400, h: 200 });
+
+  /*
+   * Give every spike a texture.
+   *
+   * Platforms are drawn for you -- mapkit/renderer.js fills them flat black -- but spikes are
+   * not drawn at all, so an untextured arena is a level whose only lethal surfaces are invisible.
+   * That is fine for the solver and useless for the human being asked to confirm the rung.
+   *
+   * Repeated at the tile's natural width and stretched to the rect's height, which is coarse
+   * (the last column is squashed to fit) but legible. Phase 5's autotile-spikes.js is the real
+   * answer; this is the arena making itself playable in the meantime. z stays 0, and since the
+   * lowest z in a map draws BEHIND Johnny, spikes never hide him.
+   */
+  for (const s of out.filter((ob) => ob.kind === 'spike')) {
+    const cols = Math.max(1, Math.ceil(s.w / o.spikeTileW));
+    const colW = s.w / cols;
+    for (let c = 0; c < cols; c++) {
+      out.push({
+        kind: 'art',
+        tile: o.spikeTile,
+        x: s.x + c * colW,
+        y: s.y,
+        w: colW,
+        h: s.h,
+        rot: 0,
+        flipX: 0,
+        flipY: 0,
+        z: 0,
+      });
+    }
+  }
 
   const id = 'module-' + String(mod.name || 'unnamed').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
   const map = MapFormat.toGame({

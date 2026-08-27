@@ -99,25 +99,33 @@
  ],
  "bossData": {
   "gate": {
-   "l": 0,
-   "t": 0,
-   "r": 0,
-   "b": 0
+   "l": -4500,
+   "t": 4700,
+   "r": -4400,
+   "b": 4900
   },
   "range": {
-   "l": 0,
-   "t": 0,
-   "r": 0,
-   "b": 0
+   "l": -4300,
+   "t": 4700,
+   "r": -3900,
+   "b": 4900
   }
  },
  "door": {
-  "l": 0,
-  "t": 0,
-  "r": 0,
-  "b": 0
+  "l": -4500,
+  "t": 5100,
+  "r": -4400,
+  "b": 5350
  },
- "doors": [],
+ "doors": [
+  {
+   "x": -4500,
+   "y": 5100,
+   "w": 100,
+   "h": 250,
+   "trigger": "never"
+  }
+ ],
  "sprt": {
   "x": -240,
   "y": -1,
@@ -128,7 +136,272 @@
   "y": 0
  },
  "yEnd": 1500,
- "art": [],
+ "art": [
+  {
+   "tile": "hazard_surface",
+   "x": -500,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": -380.625,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": -261.25,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": -141.875,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": -22.5,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 96.875,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 216.25,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 335.625,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 455,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 574.375,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 693.75,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 813.125,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 932.5,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 1051.875,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 1171.25,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 1290.625,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 1410,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 1529.375,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 1648.75,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 1768.125,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 1887.5,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 2006.875,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 2126.25,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 2245.625,
+   "y": 1040,
+   "w": 119.375,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  }
+ ],
  "meta": {
   "id": "module-gap-wide",
   "name": "Module: gap-wide",
