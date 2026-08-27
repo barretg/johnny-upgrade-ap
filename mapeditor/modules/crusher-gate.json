@@ -44,8 +44,9 @@
   "h": 2960
  },
  "solve": {
-  "hash": "76b2021627fe",
+  "hash": "1102ca6e690f",
   "settings": {
+   "physicsRev": 2,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,
@@ -71,5 +72,11 @@
   "frames": 348,
   "arena": "mapeditor/maps/module-crusher-gate.json",
   "solvedAt": "2026-08-27"
+ },
+ "handPlay": {
+  "hash": "a465b6889746",
+  "playedAt": "2026-08-27",
+  "minRung": 17,
+  "why": "Played at rung 17. The crusher timing is readable and the window is wide enough to walk through."
  }
 }

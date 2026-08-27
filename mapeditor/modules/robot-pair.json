@@ -68,8 +68,9 @@
   "h": 500
  },
  "solve": {
-  "hash": "cb4df15eeca7",
+  "hash": "dd70dea71398",
   "settings": {
+   "physicsRev": 2,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,
@@ -92,8 +93,14 @@
    "energyTier": 2,
    "ammoTier": 1
   },
-  "frames": 432,
+  "frames": 436,
   "arena": "mapeditor/maps/module-robot-pair.json",
   "solvedAt": "2026-08-27"
+ },
+ "handPlay": {
+  "hash": "42c427295058",
+  "playedAt": "2026-08-27",
+  "minRung": 12,
+  "why": "Played at rung 12. Shooting both robots is the route; the two are far enough apart that tanking through is not on offer."
  }
 }

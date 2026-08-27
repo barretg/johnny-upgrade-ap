@@ -406,8 +406,33 @@ let KILL_RECORDER = null;
 
 // Movement techs that are real but frame-perfect, so they belong behind yaml settings rather
 // than in default logic. Set per search() call from opts.
+//
+// These gate the player's CHOICE OF DIRECTION, not the existence of the shove. Vanilla always
+// replaces vx on a hit and on a shot; what takes skill is arranging to be facing the way that
+// makes the shove carry you forward instead of back. Switching a tech off therefore forces the
+// direction to the one that penalises you -- it does not delete the impulse. Deleting it made
+// every forced hit CHEAPER than vanilla (a heart bought clean passage with no lost ground),
+// which is the too-loose direction, and it is what made spike-corridor solve at rung 5.
 let ALLOW_RECOIL_BOOST = true;
 let ALLOW_KNOCKBACK_BOOST = true;
+
+/**
+ * The horizontal impulse an opposite-the-facing kick gives, with the tech switched off.
+ *
+ * `mag` is the vanilla magnitude (43.2 for a hit, 6.4 for a shot). The facing is pinned to the
+ * direction of TRAVEL, so the kick always opposes the motion and can never be aimed.
+ *
+ * Standing still returns 0 rather than kicking along s[S_SC]. Facing really is "the last direction
+ * pressed", and the search can press a direction without moving -- held against a wall, or at the
+ * apex of a deceleration -- so reading S_SC here would hand back the whole trick: stand in a spike
+ * holding left, get flung right every 60 frames. Dropping the impulse instead removes a launch,
+ * and removing launches under-reports reachability, which is the safe direction. It is the one
+ * place this model is deliberately stricter than the game rather than equal to it.
+ */
+function honestKick(s, mag) {
+  if (!s[S_VX]) return 0;
+  return s[S_VX] > 0 ? -mag : mag;
+}
 
 // A "hazard clearance margin" was tried here and removed: inflating the player's damage box makes
 // contact MORE likely, and with spare hearts each extra contact is a free 43.2px/frame knockback
@@ -558,8 +583,14 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
     // Recoil REPLACES vx with 8 in the direction opposite your facing. At low Speed that is
     // faster than you can run, so turning around and shooting is a genuine movement tech --
     // neat, but frame-perfect and not beginner level, hence the switch. The vertical bullet-hop
-    // above is unaffected; only the horizontal boost is suppressed.
-    if (ALLOW_RECOIL_BOOST) s[S_VX] = (s[S_SC] === -1 ? -0.8 : 0.8) * -8;
+    // above is unaffected.
+    //
+    // With the tech off the recoil still fires, it just fires BACKWARDS: firing on the move costs
+    // you your run speed in vanilla, and a model that let you shoot and keep running would make
+    // every must-shoot route cheaper than the real game.
+    s[S_VX] = ALLOW_RECOIL_BOOST
+      ? (s[S_SC] === -1 ? -0.8 : 0.8) * -8
+      : honestKick(s, 0.8 * 8);
     fireBullet(s, frame);
   }
 
@@ -662,11 +693,21 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
         const cx = (HZ[b] + HZ[b + 2]) / 2;
         s[S_SC] = s[S_X] > cx ? -1 : 1;
       }
-      // Knockback REPLACES vx with 43.2 away from the hazard -- roughly 4x max run speed. Turning
-      // around on the hit so "away" points where you want to go launches you across gaps that are
-      // otherwise unreachable. That is a separate trick from simply tanking a hit for the
-      // i-frames, which stays available either way (inv and the heart cost are untouched here).
-      s[S_VX] = ALLOW_KNOCKBACK_BOOST ? (s[S_SC] === -1 ? -0.8 : 0.8) * -54 : 0;
+      // Knockback REPLACES vx with 43.2 opposite the facing -- roughly 4x max run speed.
+      //
+      // For an enemy or a bomb, killSprite sets the facing from which side of the hazard you are
+      // on (just above), so the shove always points away from it: vanilla, not choosable, and
+      // applied whatever the settings say.
+      //
+      // For a spike or a laser the facing is your own, and turning around on the hit so the shove
+      // carries you forward is the tech. With it off the facing is pinned to your direction of
+      // travel, so the shove always costs you ground. It is NOT removed: tanking a hit through a
+      // spike strip costs a heart AND distance in the real game, and modelling it as a free heart
+      // is what let this simulator walk spike-corridor at 2 hearts when a person needs 4.
+      s[S_VX] =
+        ALLOW_KNOCKBACK_BOOST || (hitK >= 0 && HZK[hitK])
+          ? (s[S_SC] === -1 ? -0.8 : 0.8) * -54
+          : honestKick(s, 0.8 * 54);
       s[S_VY] = -20;
       s[S_INV] = 60;
     }
@@ -1108,6 +1149,14 @@ function search(opts = {}) {
 const _internals = {
   stepFrame,
   buildWorld,
+  // The techs are module-level state that only search() normally writes. The cross-check has to
+  // be able to step BOTH settings, because "tech off" is no longer a path that skips the impulse
+  // -- it is a different direction for it, and that is exactly the arithmetic worth checking
+  // against physics.js.
+  setTechs({ recoilBoost = true, knockbackBoost = true } = {}) {
+    ALLOW_RECOIL_BOOST = recoilBoost !== false;
+    ALLOW_KNOCKBACK_BOOST = knockbackBoost !== false;
+  },
   N_CR,
   CRUSHER_SPECS,
   SPAWN_X,

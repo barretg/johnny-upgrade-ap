@@ -75,10 +75,27 @@ function saveSettings(settings) {
   if (fs.existsSync(p)) {
     const cur = JSON.parse(fs.readFileSync(p, 'utf8'));
     if (JSON.stringify(cur) !== JSON.stringify(settings)) {
+      // Name the keys that actually differ. The old message printed both objects whole and left
+      // the reader to diff fifteen fields by eye, which matters most for physicsRev: that key
+      // means the SIMULATOR changed, not a knob, so the results on disk are not merely tuned
+      // differently, they answer a different question. Deleting the atlas is right in both
+      // cases, but only one of them is a decision worth pausing over.
+      const keys = [...new Set([...Object.keys(cur), ...Object.keys(settings)])].sort();
+      const diff = keys
+        .filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(settings[k]))
+        .map((k) => `    ${k}: on disk ${JSON.stringify(cur[k])}, now ${JSON.stringify(settings[k])}`);
+      const physics = diff.some((d) => d.trim().startsWith('physicsRev:'));
       throw new Error(
-        'Atlas settings mismatch -- existing results used a different discretization:\n' +
-          `  on disk: ${JSON.stringify(cur)}\n  now:     ${JSON.stringify(settings)}\n` +
-          'Delete solver/out to start a fresh atlas.'
+        'Atlas settings mismatch -- the existing results were computed differently:\n' +
+          diff.join('\n') +
+          (physics
+            ? '\n  physicsRev changed: fastsim/physics itself was corrected, so every result on\n' +
+              '  disk answers a different question and none of it can be extended. See the\n' +
+              '  physicsRev comment in settings.js for what moved.\n'
+            : '\n') +
+          `  atlas dir: ${OUT}\n` +
+          'Delete that directory to start a fresh atlas, or set JU_ATLAS_DIR to sweep this\n' +
+          'variant somewhere else and leave the existing one intact.'
       );
     }
     return;

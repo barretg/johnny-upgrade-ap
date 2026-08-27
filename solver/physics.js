@@ -527,9 +527,25 @@ function step(prev, input, cfg) {
       // killSprite(ob, 1)
       s.ju = 9;
       if (hit.knockback) {
+        // Enemy or bomb: killSprite picks the facing from which side of it you are on, so the
+        // shove always points away from the hazard. Vanilla, and not something a player chooses.
         s.scaleX = s.x > hit.cx ? -1 : 1;
       }
-      s.vx = (s.scaleX === -1 ? -0.8 : 0.8) * -54;
+      // Spike or laser: the facing is your own, and turning around on the hit so the shove
+      // carries you FORWARD is a frame-perfect tech. cfg.knockbackBoost gates the CHOICE, not the
+      // impulse -- with it off the shove is pinned to oppose the direction of travel, so it always
+      // costs ground. Removing the impulse instead would model a tanked hit as a free heart, which
+      // is looser than the real game and is what let a 2-heart run walk a spike corridor.
+      //
+      // Standing still (vx === 0) drops the impulse rather than firing it along scaleX: facing can
+      // be set without moving, so reading it here would hand the trick back. That under-reports
+      // reachability, which is the safe direction. fastsim.js carries the same rule in honestKick;
+      // keep the two together.
+      if (cfg.knockbackBoost !== false || hit.knockback) {
+        s.vx = (s.scaleX === -1 ? -0.8 : 0.8) * -54;
+      } else {
+        s.vx = s.vx > 0 ? -0.8 * 54 : s.vx < 0 ? 0.8 * 54 : 0;
+      }
       s.vy = -20;
       s.hearts--;
       if (s.hearts <= 0) {
@@ -565,12 +581,15 @@ function hazardAt(s, world) {
   return null;
 }
 
-function makeConfig({ spdTier, jmpTier, doubleJump, energyTier = 1 }) {
+function makeConfig({ spdTier, jmpTier, doubleJump, energyTier = 1, knockbackBoost = true }) {
   return {
     spdTier,
     jmpTier,
     doubleJump: !!doubleJump,
     energyTier,
+    // Defaults to true so a caller that says nothing gets the permissive reading, matching
+    // fastsim's module-level default. settings.js is what actually turns it off for a sweep.
+    knockbackBoost,
     spd: moveAccel(spdTier),
     jh: jumpImpulse(jmpTier),
     jumpMax: 1 + (doubleJump ? 0.1 : 0),

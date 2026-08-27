@@ -23,6 +23,18 @@ const mapId = require('./mapsource').id();
 module.exports = {
   ...(mapId ? { mapId } : {}),
 
+  // --- physics revision ------------------------------------------------------------------
+  // Bumped whenever a change to fastsim/physics alters what a run does under UNCHANGED settings.
+  // Without it such a change is invisible to atlas.js -- the settings hash still matches, so a
+  // resumed sweep would quietly interleave results from two different simulators, which is worse
+  // than either one on its own.
+  //
+  // 2 (2026-08-27): knockbackBoost/recoilBoost off used to ZERO the impulse rather than aim it,
+  // so a tanked hit cost a heart and no ground. Vanilla always applies the shove. Every combo
+  // that can survive a hit is affected; measured on two 5-heart combos it moved reachable coins
+  // by +92 and by -32/+14, i.e. in both directions. Atlases built at rev 1 are not comparable.
+  physicsRev: 2,
+
   // --- human-execution knobs -------------------------------------------------------------
   // These decide what counts as a route a person could actually pull off, as opposed to one that
   // is merely physically possible. They change results, so they are part of the atlas identity.
@@ -37,9 +49,14 @@ module.exports = {
   // turning around and shooting is a real but frame-perfect speed tech. Off by default.
   recoilBoost: bool('JU_RECOIL_BOOST', false),
 
-  // Damage knockback sets |vx| to 43.2 away from the hazard -- ~4x max run speed. Turning around
-  // on the hit to aim that across a gap is a separate trick from tanking a hit for the i-frames,
-  // which stays available either way. Off by default.
+  // Damage knockback sets |vx| to 43.2 opposite your facing -- ~4x max run speed. Turning around
+  // on the hit so that points where you want to go is a separate trick from tanking a hit for the
+  // i-frames, which stays available either way. Off by default.
+  //
+  // This gates the CHOICE OF DIRECTION, not the impulse. With it off the shove still lands, aimed
+  // to oppose your direction of travel, so a tanked hit costs a heart AND ground exactly as it
+  // does in the game. It used to zero the impulse instead, which made every forced hit cheaper
+  // than vanilla -- see physicsRev below.
   knockbackBoost: bool('JU_KNOCKBACK_BOOST', false),
 
   // Input granularity: a direction is held for this many frames, with an optional single jump tap

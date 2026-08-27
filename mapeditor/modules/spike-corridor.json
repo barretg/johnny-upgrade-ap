@@ -37,17 +37,20 @@
   "y": 300
  },
  "expect": {
-  "minRung": 5,
-  "tolerance": 0,
-  "why": "One unavoidable spike strip in a corridor with 100px of headroom, so it cannot be jumped (a jump into the ceiling gains 10px, and clearing the 60px spikes needs 60). At 1 heart any contact is fatal, so rungs 1-4 fail. Rung 5 is the first Energy: 2 hearts survive the hit, and the 60 frames of invulnerability cover the 210px of contact at spd2 in 44 frames. Exactly one hit, so no more Energy is needed."
+  "minRung": 12,
+  "tolerance": 2,
+  "independent": false,
+  "revisedFrom": 5,
+  "why": "REVISED, and no longer an independent prediction -- it is calibrated against the solver, so it does not count towards the module set's hand-prediction record (the other six still do). The original estimate of 5 was arithmetic about i-frames alone: one unavoidable 150px spike strip in a corridor with 100px of headroom, 2 hearts to survive the hit, and 60 frames of invulnerability covering the 210px contact zone at spd2. It was wrong because the simulator it was checked against was wrong in the same way: knockbackBoost:false zeroed the shove instead of aiming it, so a tanked hit cost a heart and no ground. Vanilla always applies killSprite's 43.2px/frame, and with the tech off it is pinned to oppose your travel, so crossing costs a heart AND the ground you are thrown back over -- which has to be re-run inside the same 60 frames. That is a Speed problem, not an Energy one, which is why the answer moved from the first Energy rung to the first rung with enough Speed to get back across (rung 12, spd4). Tolerance 2 because the re-run distance is a continuous quantity."
  },
  "size": {
   "w": 1600,
   "h": 500
  },
  "solve": {
-  "hash": "fbfd21d5db53",
+  "hash": "ad3b424fa54b",
   "settings": {
+   "physicsRev": 2,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,
@@ -62,16 +65,22 @@
    "maxFrames": 9000,
    "hashBits": 25
   },
-  "minRung": 5,
+  "minRung": 12,
   "combo": {
-   "spdTier": 2,
-   "jmpTier": 2,
-   "doubleJump": false,
+   "spdTier": 4,
+   "jmpTier": 4,
+   "doubleJump": true,
    "energyTier": 2,
-   "ammoTier": 0
+   "ammoTier": 1
   },
-  "frames": 412,
+  "frames": 310,
   "arena": "mapeditor/maps/module-spike-corridor.json",
   "solvedAt": "2026-08-27"
+ },
+ "handPlay": {
+  "hash": "916a3d327070",
+  "playedAt": "2026-08-27",
+  "minRung": 22,
+  "why": "Played at spd2 with 4 hearts, taking THREE hits to cross; 2 hearts (the rung the solver gave before the knockback fix) is not survivable and not executable. Raised to rung 22, the lowest ladder rung that dominates the hand-verified combo (spd2, energy 4). This verdict predates the knockback fix and still stands: it is a fact about the real game, and the game did not change. It is an upper bound, not a measured minimum -- nothing between the solved rung and 22 was played, and rung 22 also carries spd7, at which the corrected solver says 2 hearts suffice. Worth replaying at rung 12 to see whether the fixed model is now honest; until then the played number governs."
  }
 }

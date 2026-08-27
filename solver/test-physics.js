@@ -87,10 +87,21 @@ if (P.LASERS.length) {
 const FS = require('./fastsim');
 const I = FS._internals;
 
-function crossCheck(cfg, seed, frames) {
+function crossCheck(cfg, seed, frames, startAt) {
   I.buildWorld(frames + 8);
+  I.setTechs({ knockbackBoost: cfg.knockbackBoost });
   let ps = P.initialState(cfg);
   const fsState = I.newState();
+  fsState[I.S_HP] = cfg.energyTier;
+  // Spawn is nowhere near a hazard, so a random walk from it never takes a hit -- an arm that
+  // relies on one would silently prove nothing. startAt drops the player onto a spike instead,
+  // and the caller asserts that hits really happened.
+  if (startAt) {
+    ps.x = fsState[I.S_X] = startAt.x;
+    ps.y = fsState[I.S_Y] = startAt.y;
+  }
+  let hitsSeen = 0;
+  let prevHearts = ps.hearts;
   // Cheap deterministic PRNG so a failure is reproducible from the seed alone.
   let r = seed >>> 0;
   const rnd = () => ((r = (r * 1103515245 + 12345) >>> 0) / 4294967296);
@@ -101,8 +112,11 @@ function crossCheck(cfg, seed, frames) {
     const rc = I.stepFrame(fsState, f, dir, jump ? 1 : 0, cfg.spd, cfg.jh === null ? 0 : cfg.jh, cfg.jumpMax, 0);
     const fsDead = rc === 1;
     if (next.dead || fsDead) {
-      if (next.dead !== fsDead) return `frame ${f}: died in ${next.dead ? 'physics' : 'fastsim'} only`;
-      return null; // both dead on the same frame: agreed, and there is nothing left to compare
+      if (next.dead !== fsDead) {
+        return { err: `frame ${f}: died in ${next.dead ? 'physics' : 'fastsim'} only`, hitsSeen };
+      }
+      // Both dead on the same frame: agreed, and there is nothing left to compare.
+      return { err: null, hitsSeen };
     }
     const pairs = [
       ['x', next.x, fsState[I.S_X]],
@@ -110,34 +124,82 @@ function crossCheck(cfg, seed, frames) {
       ['vx', next.vx, fsState[I.S_VX]],
       ['vy', next.vy, fsState[I.S_VY]],
       ['ju', next.ju, fsState[I.S_JU]],
+      // Hearts, the i-frame counter and the facing are what the knockback path writes, so a
+      // divergence in the two files' knockback rules shows up in these three and nowhere else.
+      ['hearts', next.hearts, fsState[I.S_HP]],
+      ['inv', next.inv, fsState[I.S_INV]],
+      ['scaleX', next.scaleX, fsState[I.S_SC]],
     ];
     for (let c = 0; c < I.N_CR; c++) {
       pairs.push([`crusher${c}.y`, next.crushers[c].y, fsState[I.S_CR0 + c * 3]]);
       pairs.push([`crusher${c}.flag`, next.crushers[c].flag, fsState[I.S_CR0 + c * 3 + 2]]);
     }
     for (const [name, pv, fv] of pairs) {
-      if (Math.abs(pv - fv) > 1e-9) return `frame ${f}: ${name} physics=${pv} fastsim=${fv}`;
+      if (Math.abs(pv - fv) > 1e-9) {
+        return { err: `frame ${f}: ${name} physics=${pv} fastsim=${fv}`, hitsSeen };
+      }
     }
+    if (next.hearts < prevHearts) hitsSeen++;
+    prevHearts = next.hearts;
     ps = next;
   }
-  return null;
+  return { err: null, hitsSeen };
 }
 
-console.log('\nphysics.js vs fastsim.js (1 heart, no gun):');
+const COMBOS = [
+  { spdTier: 1, jmpTier: 1, doubleJump: false },
+  { spdTier: 5, jmpTier: 3, doubleJump: true },
+  { spdTier: 10, jmpTier: 10, doubleJump: true },
+  { spdTier: 3, jmpTier: 0, doubleJump: false },
+];
+
+// Standing inside a spike, so the very first frame lands a hit and the 60 i-frames then expire
+// back into another one. This is what makes the knockback arms non-vacuous.
+const ON_SPIKE = P.STATIC_SPIKES.slice(0, 4).map((sp) => ({
+  x: (sp.l + sp.r) / 2,
+  y: sp.t + 30,
+}));
+
 let mismatches = 0;
-for (const t of [{ spdTier: 1, jmpTier: 1, doubleJump: false }, { spdTier: 5, jmpTier: 3, doubleJump: true },
-                 { spdTier: 10, jmpTier: 10, doubleJump: true }, { spdTier: 3, jmpTier: 0, doubleJump: false }]) {
-  const cfg = P.makeConfig(t);
-  let bad = 0;
-  for (let seed = 1; seed <= 40; seed++) {
-    const err = crossCheck(cfg, seed * 7919, 300);
-    if (err) {
-      if (bad === 0) console.log(`  spd${t.spdTier}/jmp${t.jmpTier}/dj${t.doubleJump ? 1 : 0} seed ${seed}: ${err}`);
-      bad++;
-      mismatches++;
+let vacuous = 0;
+
+function arm(label, cfg0, starts) {
+  console.log(`\nphysics.js vs fastsim.js (${label}):`);
+  for (const t of COMBOS) {
+    const cfg = P.makeConfig({ ...t, ...cfg0 });
+    let bad = 0;
+    let hits = 0;
+    let runs = 0;
+    for (const startAt of starts) {
+      for (let seed = 1; seed <= 40 / starts.length; seed++) {
+        const out = crossCheck(cfg, seed * 7919, 300, startAt);
+        runs++;
+        hits += out.hitsSeen;
+        if (out.err) {
+          if (bad === 0) {
+            console.log(`  spd${t.spdTier}/jmp${t.jmpTier}/dj${t.doubleJump ? 1 : 0} seed ${seed}: ${out.err}`);
+          }
+          bad++;
+          mismatches++;
+        }
+      }
+    }
+    const note = starts[0] ? `, ${hits} survivable hits` : '';
+    console.log(
+      `  spd${t.spdTier}/jmp${t.jmpTier}/dj${t.doubleJump ? 1 : 0}: ${runs - bad}/${runs} runs agree${note}`
+    );
+    // An arm that never took a hit does not check the knockback rules, however green it looks.
+    // That is precisely how fastsim came to zero out the knockback while physics.js applied it.
+    if (starts[0] && hits === 0) {
+      console.log('  ^ VACUOUS: this arm never landed a hit, so it checked nothing');
+      vacuous++;
     }
   }
-  console.log(`  spd${t.spdTier}/jmp${t.jmpTier}/dj${t.doubleJump ? 1 : 0}: ${40 - bad}/40 runs agree`);
 }
-console.log(mismatches === 0 ? '  OK' : `  ${mismatches} MISMATCHES`);
-if (mismatches) process.exitCode = 1;
+
+arm('1 heart, no gun', { energyTier: 1, knockbackBoost: true }, [null]);
+arm('5 hearts on a spike, knockback tech ON', { energyTier: 5, knockbackBoost: true }, ON_SPIKE);
+arm('5 hearts on a spike, knockback tech OFF', { energyTier: 5, knockbackBoost: false }, ON_SPIKE);
+
+console.log(mismatches === 0 && vacuous === 0 ? '  OK' : `  ${mismatches} MISMATCHES, ${vacuous} vacuous arm(s)`);
+if (mismatches || vacuous) process.exitCode = 1;

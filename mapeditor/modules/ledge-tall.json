@@ -39,8 +39,9 @@
   "h": 670
  },
  "solve": {
-  "hash": "32f362cfd5eb",
+  "hash": "ca2c74015465",
   "settings": {
+   "physicsRev": 2,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,
@@ -66,5 +67,11 @@
   "frames": 232,
   "arena": "mapeditor/maps/module-ledge-tall.json",
   "solvedAt": "2026-08-27"
+ },
+ "handPlay": {
+  "hash": "ec7d848645ed",
+  "playedAt": "2026-08-27",
+  "minRung": 14,
+  "why": "Played at rung 14. The step is clearable with a normal run-up, no wall-hug or corner-boost needed."
  }
 }

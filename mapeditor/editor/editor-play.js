@@ -8,9 +8,16 @@
  * to have two opinions about:
  *
  *   game.ldat.<track>.v is NOT a tier count. shop.js computes the real index as
- *   Math.round(v * 10) and adds 0.1 per purchase, so v = tiers * 0.1 for every
+ *   Math.round(v * 10) and adds 0.1 per purchase, so v = tiers / 10 for every
  *   track regardless of how many tiers it has. The Archipelago client writes it
  *   the same way.
+ *
+ *   Divide by 10; do NOT multiply by 0.1. They differ in binary floating point
+ *   at tiers 3, 6 and 7 (3 * 0.1 = 0.30000000000000004), and iniNRG counts
+ *   hearts with an unrounded `for (i = 0; i < nrg.v * 10; i++)`, so multiplying
+ *   draws FOUR hearts for Energy 3. Every other consumer rounds, which is why
+ *   Energy is the only track where the difference shows -- and it is the track
+ *   a difficulty playtest is most often reading.
  *
  * Settings are remembered across runs, and shared between the two hosts on
  * purpose: "how strong is Johnny" is a question about the player, not about the
@@ -80,7 +87,7 @@
     if (!win.game || !win.game.ldat) return false;
     for (const u of UPGRADES) {
       if (!win.game.ldat[u.key]) win.game.ldat[u.key] = { v:0, u:0.1 };
-      win.game.ldat[u.key].v = (values[u.key] || 0) * 0.1;
+      win.game.ldat[u.key].v = (values[u.key] || 0) / 10;
     }
     if (win.game.ldat.csh) win.game.ldat.csh.v = Math.max(win.game.ldat.csh.v, 999);
     return true;

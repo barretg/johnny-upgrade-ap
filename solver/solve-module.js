@@ -23,6 +23,11 @@
 //   * "Physically possible" is not "humanly executable". A solved module still has to be played
 //     by hand before it is trusted, exactly as the vanilla logic goes through
 //     client/johnny-upgrade-logic-test.user.js and strip_failed.py.
+//     That verdict is recorded in the module's `handPlay` block and it may only ever RAISE the
+//     rung: the effective difficulty of a module is max(solve.minRung, handPlay.minRung). A
+//     handPlay BELOW the solved rung is not a correction, it is a claim that a human did
+//     something the simulator says is impossible -- that is a physics bug and it is refused here
+//     rather than written down.
 //
 // Every module carries a hand-written `expect.minRung` and this compares against it. The
 // interesting output is a disagreement, and the two directions are NOT equally interesting: the
@@ -52,7 +57,29 @@ const canonical = (v) => {
   return JSON.stringify(v === undefined ? null : v);
 };
 
-/** What a solve record is an answer ABOUT: the geometry, the entry/exit, and the settings. */
+/**
+ * What a HAND-PLAY verdict is an answer about: the geometry and the entry/exit, and nothing else.
+ *
+ * A person played the arena in the real game and reported the rung they cleared it at. That is a
+ * fact about the game and the ladder, neither of which moves when the simulator's discretization
+ * or its physics revision does -- so redraw the module and the verdict dies, but bump qPos or fix
+ * a knockback rule and it stands. Hashing settings in here would silently throw away every
+ * hand-play the moment the solver was corrected, which is exactly when they matter most.
+ */
+function geometryHash(mod) {
+  return crypto
+    .createHash('sha1')
+    .update(canonical({ objects: mod.objects, entry: mod.entry, exit: mod.exit }))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+/**
+ * What a SOLVE record is an answer about: the geometry, the entry/exit, AND the settings.
+ *
+ * Settings belong here and not in geometryHash because the solve record is this simulator's
+ * output, and every knob in settings.js -- physicsRev included -- can change it.
+ */
 function moduleHash(mod, settings) {
   return crypto
     .createHash('sha1')
@@ -76,8 +103,45 @@ function readModule(file, settings) {
     mod.staleSolve = mod.solve;
     mod.solve = null;
   }
+  // A hand-play verdict goes stale on GEOMETRY alone: someone who widens a gap has not played the
+  // wider gap, but someone who fixes the simulator has not un-played anything.
+  const wantGeom = geometryHash(mod);
+  if (mod.handPlay && mod.handPlay.hash !== wantGeom) {
+    mod.staleHandPlay = mod.handPlay;
+    mod.handPlay = null;
+  }
   mod.hash = want;
+  mod.geometryHash = wantGeom;
   return mod;
+}
+
+/**
+ * The rung a module is actually worth, once a human has played it.
+ *
+ * The solver answers "physically possible", frame by frame. A hand-play verdict is the other
+ * half of the answer, and it is allowed to move the number in exactly one direction: UP. A
+ * module that the simulator clears at rung 5 but a person can only clear at rung 22 is a rung-22
+ * module, because a generated map is played by people.
+ *
+ * A handPlay BELOW the solve rung is refused. It would mean a human did something the simulator
+ * proved impossible, which is a bug in the physics, not a difficulty correction -- and quietly
+ * lowering a rung is the direction that produces an unbeatable map.
+ *
+ * Returns { rung, source, played }; rung is null if the module has no usable solve record.
+ */
+function effectiveMinRung(mod) {
+  const solved = mod.solve && typeof mod.solve.minRung === 'number' ? mod.solve.minRung : null;
+  const hand = mod.handPlay && typeof mod.handPlay.minRung === 'number' ? mod.handPlay.minRung : null;
+  if (hand !== null && solved !== null && hand < solved) {
+    throw new Error(
+      `${mod.name}: handPlay.minRung ${hand} is below solve.minRung ${solved}. A person cleared ` +
+        'a rung the simulator says is impossible, so the physics is wrong. Fix that before ' +
+        'recording it -- hand-play may only ever raise a rung.'
+    );
+  }
+  if (hand !== null && solved === null) return { rung: hand, source: 'handPlay', played: true };
+  if (hand === null) return { rung: solved, source: 'solve', played: false };
+  return { rung: Math.max(hand, solved), source: hand > solved ? 'handPlay' : 'solve', played: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +251,7 @@ function main() {
 
   let disagreements = 0;
   let unknowns = 0;
+  let unplayed = 0;
 
   for (const file of files) {
     const mod = readModule(path.resolve(file), SETTINGS);
@@ -238,11 +303,31 @@ function main() {
       disagreements++;
     }
 
+    // The hand-play verdict is checked against THIS run's answer, not against the stored one:
+    // if the solver has just moved, a verdict recorded below where it now sits has to be caught
+    // here rather than surviving in the file as an answer.
+    let handNote = '';
+    if (mod.handPlay && typeof mod.handPlay.minRung === 'number') {
+      const hand = mod.handPlay.minRung;
+      if (res.minRung !== null && hand < res.minRung) {
+        handNote =
+          `  [HAND-PLAY ${hand} IS BELOW THE SOLVED RUNG -- a person cleared what the ` +
+          'simulator says is impossible; that is a physics bug, not a difficulty correction]';
+        disagreements++;
+      } else if (res.minRung !== null && hand > res.minRung) {
+        handNote = `  [hand-play raises it to ${hand}: ${mod.handPlay.why || 'no reason recorded'}]`;
+      } else {
+        handNote = '  [hand-played, confirmed]';
+      }
+    } else if (res.minRung !== null) {
+      handNote = '  [NOT hand-played: physically possible only]';
+      unplayed++;
+    }
     console.log(
       `${String(mod.name).padEnd(22)} minRung=${res.minRung === null ? '-' : res.minRung}` +
         ` expect=${expected === null ? '-' : expected}` +
         ` frames=${res.frames === null ? '-' : res.frames}` +
-        ` probes=${res.probed.length} ${seconds.toFixed(1)}s  ${verdict}`
+        ` probes=${res.probed.length} ${seconds.toFixed(1)}s  ${verdict}${handNote}`
     );
 
     if (args.flags.write && res.minRung !== null) {
@@ -256,6 +341,11 @@ function main() {
         arena: path.relative(ROOT, arenaPath).replace(/\\/g, '/'),
         solvedAt: new Date().toISOString().slice(0, 10),
       };
+      // readModule already decided whether the stored handPlay still describes this module.
+      // Writing that decision back is the point: a stale verdict left in the file would be read
+      // as an answer by the next tool that opens it.
+      if (mod.handPlay) stored.handPlay = mod.handPlay;
+      else delete stored.handPlay;
       fs.writeFileSync(mod.file, JSON.stringify(stored, null, 1) + '\n');
     }
 
@@ -268,13 +358,29 @@ function main() {
   }
 
   if (disagreements || unknowns) {
-    console.log(`\n${disagreements} disagreement(s), ${unknowns} unknown(s)`);
+    console.log(
+      `\n${disagreements} disagreement(s), ${unknowns} unknown(s), ${unplayed} not hand-played`
+    );
     process.exitCode = 1;
+  } else if (unplayed) {
+    // Not a failure: a module can be freshly written and not yet played. It is still worth
+    // saying out loud, because "solved" reads as "trusted" and they are not the same thing.
+    console.log(
+      `\nall modules agree with their hand-written expectations; ${unplayed} still awaiting a hand-play pass`
+    );
   } else {
-    console.log('\nall modules agree with their hand-written expectations');
+    console.log('\nall modules agree with their expectations, and all are hand-played');
   }
 }
 
 if (require.main === module) main();
 
-module.exports = { readModule, moduleHash, MODULE_DIR, ARENA_DIR, MODULE_FRAMES };
+module.exports = {
+  readModule,
+  moduleHash,
+  geometryHash,
+  effectiveMinRung,
+  MODULE_DIR,
+  ARENA_DIR,
+  MODULE_FRAMES,
+};

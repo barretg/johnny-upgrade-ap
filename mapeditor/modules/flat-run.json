@@ -32,8 +32,9 @@
   "h": 200
  },
  "solve": {
-  "hash": "cde92e1bab0d",
+  "hash": "c92214cfbced",
   "settings": {
+   "physicsRev": 2,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,
@@ -59,5 +60,11 @@
   "frames": 240,
   "arena": "mapeditor/maps/module-flat-run.json",
   "solvedAt": "2026-08-27"
+ },
+ "handPlay": {
+  "hash": "4e2babf907fa",
+  "playedAt": "2026-08-27",
+  "minRung": 1,
+  "why": "Played at rung 1: walk right, no hazards. The fixture that proves the harness does not report everything as hard."
  }
 }
