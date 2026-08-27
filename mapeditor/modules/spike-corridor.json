@@ -81,6 +81,7 @@
   "hash": "916a3d327070",
   "playedAt": "2026-08-27",
   "minRung": 22,
-  "why": "Played at spd2 with 4 hearts, taking THREE hits to cross; 2 hearts (the rung the solver gave before the knockback fix) is not survivable and not executable. Raised to rung 22, the lowest ladder rung that dominates the hand-verified combo (spd2, energy 4). This verdict predates the knockback fix and still stands: it is a fact about the real game, and the game did not change. It is an upper bound, not a measured minimum -- nothing between the solved rung and 22 was played, and rung 22 also carries spd7, at which the corrected solver says 2 hearts suffice. Worth replaying at rung 12 to see whether the fixed model is now honest; until then the played number governs."
+  "why": "Played the arena at rung 22 (22 spd7/jmp7/dj1/e4/ammo3) and cleared it on attempt 1.",
+  "attempts": 1
  }
 }

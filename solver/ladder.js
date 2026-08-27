@@ -18,6 +18,17 @@
 //
 // The item pool the logic can see, and which the 36 steps below spend exactly once each:
 //   Speed 10, Jump 10, Double Jump 1, Energy 4 (5 hearts total, base 1), Laser Gun 1, Ammo 10.
+//
+// Loads as a CommonJS module in node and as a plain script in the browser, the same way
+// mapkit/mapformat.js does. The map editor shows this table as its rung reference, and a second
+// copy of the ladder -- generated, transcribed, whatever -- would be a second answer to "what
+// does rung 12 mean", which is the one thing this file exists to prevent. It is pure data and
+// arithmetic with no requires, so sharing it costs nothing.
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.Ladder = factory();
+}(typeof self !== 'undefined' ? self : this, function () {
+'use strict';
 
 // The order the items are spent in. This is a design choice, not a derivation: it is the shape
 // the generated map's progression will have, so it interleaves the two movement tracks, holds
@@ -126,4 +137,5 @@ function findMinRung(clears) {
   return { minRung: lo, probed };
 }
 
-module.exports = { RUNGS, N_RUNGS, TRACKS, POOL, searchOpts, label, findMinRung };
+return { RUNGS, N_RUNGS, TRACKS, POOL, searchOpts, label, findMinRung };
+}));

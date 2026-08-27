@@ -14,6 +14,8 @@
 <div id="boot"></div>
 
 <script src="/mapkit/mapformat.js"></script>
+<!-- the real solver/ladder.js, so the rung reference cannot drift from the solver -->
+<script src="/solver/ladder.js"></script>
 <script src="/editor-core.js"></script>
 <script>
 'use strict';
@@ -64,6 +66,15 @@ const io = {
     });
     return r.json();
   },
+  /*
+   * Run the solver over a module and write the answer into its file. Only the dev
+   * server has this -- solving is node, and the userscript has no node -- so the
+   * editor treats it as optional and a module saved in the page stays unsolved.
+   */
+  async solveModule(name) {
+    const r = await fetch('/api/solve/' + encodeURIComponent(name), { method: 'POST' });
+    return r.json();
+  },
   async tiles() {
     const st = await (await fetch('/api/state')).json();
     return st.tiles;
@@ -73,8 +84,23 @@ const io = {
     img.src = '/tile/' + encodeURIComponent(name) + '.png';
     return img;
   },
-  play(id) {
-    window.open('/play?map=' + encodeURIComponent(id), 'johnny-quickrun');
+  /*
+   * opts turns an ordinary playtest into a hand-test: the play page pins the
+   * upgrade sliders to that ladder rung and offers to record the verdict, which is
+   * the only way a module ever gets marked as played by a person.
+   */
+  play(id, opts) {
+    let url = '/play?map=' + encodeURIComponent(id);
+    if (opts && opts.module) {
+      url += '&module=' + encodeURIComponent(opts.module) + '&rung=' + encodeURIComponent(opts.rung);
+      // where to go back to, which for a hand-test is NOT the map being played
+      if (opts.from) url += '&from=' + encodeURIComponent(opts.from);
+    }
+    window.open(url, 'johnny-quickrun');
+  },
+  async moduleArena(name) {
+    const r = await fetch('/api/arena/' + encodeURIComponent(name), { method: 'POST' });
+    return r.json();
   },
 };
 

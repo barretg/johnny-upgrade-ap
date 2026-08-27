@@ -40,6 +40,19 @@
   .chk { display:flex; gap:6px; align-items:center; font-size:11px;
          color:var(--dim); margin:2px 0 8px; cursor:pointer; }
   .chk input { margin:0; }
+  /* the hand-test bar: this is the half of a module's difficulty a person answers */
+  #hand { display:none; background:#1b2a22; border:1px solid #2c4436; border-radius:7px;
+          padding:9px 10px; margin:0 0 10px; }
+  #hand.void { background:#2a2519; border-color:#3d3520; }
+  #hand h3 { margin:0 0 5px; font-size:11px; color:var(--text); }
+  #hand .combo { font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+                 color:var(--dim); word-break:break-all; }
+  #hand textarea { width:100%; background:#12141a; border:1px solid var(--line); color:var(--text);
+                   border-radius:5px; padding:5px 6px; font:inherit; font-size:10px; margin:7px 0 6px;
+                   resize:vertical; min-height:52px; }
+  #hand .msg { font-size:10px; line-height:1.4; color:var(--dim); margin:4px 0 0; }
+  #hand .msg.bad { color:#e07a7a; }
+  #hand .msg.good { color:#64d19a; }
 </style>
 </head>
 <body>
@@ -47,6 +60,7 @@
 <div id="game"></div>
 
 <aside>
+  <div id="hand"></div>
   <h2>Map</h2>
   <div id="status">loading…</div>
   <button id="restart" class="primary">restart level</button>
@@ -62,6 +76,7 @@
   <p class="note">Upgrades apply on the next level start — hit restart after changing them.</p>
 </aside>
 
+<script src="/solver/ladder.js"></script>
 <script src="/editor-play.js"></script>
 <script src="/mapkit/mapformat.js"></script>
 <script src="/mapkit/crushers.js"></script>
@@ -91,6 +106,23 @@
 
 const params = new URLSearchParams(location.search);
 const MAP_ID = params.get('map');
+/*
+ * A hand-test, rather than an ordinary playtest.
+ *
+ * `module` names the module being tested and `rung` the ladder rung it is being
+ * tested AT. The sliders are then not a preference -- they are the claim the
+ * verdict will be recorded against -- so they are pinned to the rung, they do not
+ * touch the remembered playtest settings, and moving one voids the test until it
+ * is put back.
+ */
+// what "back" means. Normally the map being played, but a hand-test is played in a
+// throwaway arena the editor built -- returning there would drop you into the test
+// box instead of the map you were building.
+const BACK_TO = params.get('from') || params.get('map');
+const HAND_MODULE = params.get('module');
+const HAND_RUNG = params.has('rung') ? Number(params.get('rung')) : null;
+const handRung = (HAND_MODULE && typeof Ladder !== 'undefined' && HAND_RUNG !== null &&
+                  Ladder.RUNGS[HAND_RUNG]) || null;
 
 
 let mapData = null;
@@ -202,7 +234,7 @@ function patchAndStart() {
  * "what does game.ldat.spd.v = 0.7 mean" is exactly the kind of thing that goes
  * quietly out of step. Only the sidebar around them belongs to this page.
  */
-const upValues = MapEditorPlay.startingValues();
+const upValues = handRung ? MapEditorPlay.valuesForRung(handRung) : MapEditorPlay.startingValues();
 let sliders = null;
 function buildUpgradePanel() {
   const quick = document.getElementById('quickRestart');
@@ -212,7 +244,10 @@ function buildUpgradePanel() {
 
   sliders = MapEditorPlay.buildSliders(document, document.getElementById('ups'), upValues, (committed) => {
     applyUpgrades();
-    if (committed) savePrefs();
+    // a hand-test must not overwrite the remembered playtest settings: the rung is
+    // the module's number, not this browser's preference
+    if (committed && !handRung) savePrefs();
+    if (handRung) renderHand();
   });
 
   document.getElementById('maxAll').onclick = () => sliders.set((u) => u.max);
@@ -224,8 +259,156 @@ function buildUpgradePanel() {
   // carry the map id back, so the editor reopens what was being edited rather
   // than starting on a blank Untitled
   document.getElementById('back').onclick = () => {
-    location.href = MAP_ID ? '/?map=' + encodeURIComponent(MAP_ID) : '/';
+    location.href = BACK_TO ? '/?map=' + encodeURIComponent(BACK_TO) : '/';
   };
+  if (handRung) renderHand();
+}
+
+/*
+ * The hand-test bar.
+ *
+ * The verdict is recorded HERE, next to the act, rather than back in the editor:
+ * "did I actually clear that" is a question with a short memory, and a loop that
+ * ends in a different tab ends in nobody recording anything.
+ *
+ * Two buttons, which together walk the ladder: clear it and the rung is written
+ * down; fail and the next rung up is loaded to try again. Because both play at
+ * real ladder rungs, the rung recorded is always the rung that was actually
+ * cleared -- no "lowest rung dominating some off-ladder combo" arithmetic to get
+ * wrong.
+ */
+/*
+ * Attempts, kept across reloads.
+ *
+ * A person failing a rung is NOT the rung being too low -- it is a person having
+ * one go at a platformer. Moving up the ladder on the first death would grade
+ * every module harder than it is, and a library of over-graded modules builds a
+ * map padded with upgrades nobody needed. So failing an attempt and giving up on
+ * a rung are two different buttons, and only the second one moves.
+ *
+ * The count is manual on purpose. A restart is not reliably a failed attempt --
+ * you restart to re-run an approach, to look at something again, because the
+ * camera was wrong -- and a number invented from ambiguous events would be worse
+ * than the person's own claim about how many tries it took.
+ *
+ * The trail of given-up rungs travels with it, so a verdict recorded at rung 18
+ * can say what happened at 12 and 14. That is the real content of a hand-play:
+ * not just where it becomes possible, but how hard it was on the way.
+ */
+const HAND_PREFS = 'johnny-handtest';
+function readHand() {
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(HAND_PREFS)); } catch (e) { /* fine */ }
+  if (!d || d.module !== HAND_MODULE) d = { module: HAND_MODULE, rung: null, attempts: 0, trail: [] };
+  if (d.rung !== (handRung && handRung.index)) { d.rung = handRung && handRung.index; d.attempts = 0; }
+  if (!Array.isArray(d.trail)) d.trail = [];
+  return d;
+}
+function writeHand(d) {
+  try { localStorage.setItem(HAND_PREFS, JSON.stringify(d)); } catch (e) { /* fine */ }
+}
+let hand = null;
+
+const trailText = (d) =>
+  d.trail.map((t) => 'rung ' + t.rung + ' failed after ' + t.attempts +
+    (t.attempts === 1 ? ' attempt' : ' attempts')).join('; ');
+
+function defaultWhy(d) {
+  const tried = d.attempts + 1;
+  return 'Played the arena at rung ' + handRung.index + ' (' + Ladder.label(handRung) +
+    ') and cleared it on attempt ' + tried + '.' +
+    (d.trail.length ? ' Before that: ' + trailText(d) + '.' : '');
+}
+
+function renderHand() {
+  const el = document.getElementById('hand');
+  if (!handRung) return;
+  if (!hand) hand = readHand();
+  el.style.display = 'block';
+  const pinned = MapEditorPlay.matchesRung(upValues, handRung);
+  el.classList.toggle('void', !pinned);
+  const next = Ladder.RUNGS[handRung.index + 1];
+  const tried = hand.attempts + 1;
+  el.innerHTML =
+    '<h3>Hand-test: ' + esc(HAND_MODULE) + ' at rung ' + handRung.index + '</h3>' +
+    '<div class="combo">' + esc(Ladder.label(handRung)) +
+      ' &middot; time max &middot; gunpow 0</div>' +
+    '<p class="msg">Attempt <b>' + tried + '</b> at this rung' +
+      (hand.trail.length ? ' &middot; ' + esc(trailText(hand)) : '') + '</p>' +
+    (pinned ? '' : '<p class="msg bad">The sliders no longer match rung ' + handRung.index +
+      '. A verdict is a claim about a rung, so put them back (or reload) before recording one.</p>') +
+    '<textarea id="handwhy" placeholder="what happened"></textarea>' +
+    '<button id="handok" class="primary"' + (pinned ? '' : ' disabled') +
+      '>cleared it on attempt ' + tried + '</button>' +
+    '<button id="handfail">that attempt failed &mdash; try again</button>' +
+    (next ? '<button id="handup">give up on rung ' + handRung.index +
+      ' &mdash; move to rung ' + next.index + '</button>' : '') +
+    '<p class="msg" id="handmsg">Failing is not the same as impossible: keep trying at this ' +
+      'rung as long as you think it is on you rather than on the module. Only move up when you ' +
+      'have decided the rung genuinely is not enough &mdash; a rung raised too easily grades ' +
+      'the module harder than it is, and a verdict may never be lowered afterwards.</p>';
+
+  const why = document.getElementById('handwhy');
+  why.value = defaultWhy(hand);
+  document.getElementById('handok').onclick = () => recordVerdict(why.value, tried);
+
+  document.getElementById('handfail').onclick = () => {
+    hand.attempts++;
+    writeHand(hand);
+    renderHand();
+    // restarting is what actually starts the next attempt
+    if (window.game && window.levl !== undefined) { applyUpgrades(); levl = 1; newState(); }
+  };
+
+  const up = document.getElementById('handup');
+  if (up) up.onclick = () => {
+    hand.trail.push({ rung: handRung.index, attempts: tried });
+    hand.rung = next.index;
+    hand.attempts = 0;
+    writeHand(hand);
+    const u = new URL(location.href);
+    u.searchParams.set('rung', String(next.index));
+    location.href = u.toString();
+  };
+}
+
+const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+async function recordVerdict(why, attempts) {
+  const msg = document.getElementById('handmsg');
+  const btn = document.getElementById('handok');
+  btn.disabled = true;
+  msg.className = 'msg';
+  msg.textContent = 'recording…';
+  let r = null;
+  try {
+    r = await (await fetch('/api/handplay/' + encodeURIComponent(HAND_MODULE), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        minRung: handRung.index,
+        why,
+        attempts,
+        // what was tried and given up on before this rung, so the file says how hard
+        // the module was and not merely where it became possible
+        trail: hand.trail,
+      }),
+    })).json();
+  } catch (e) { r = { ok: false, error: e.message }; }
+  if (r && r.ok) {
+    // the run is over, so the attempt counter starts clean for the next module
+    hand = { module: HAND_MODULE, rung: handRung.index, attempts: 0, trail: [] };
+    writeHand(hand);
+    msg.className = 'msg good';
+    msg.textContent = 'Recorded: ' + HAND_MODULE + ' is hand-played at rung ' + r.minRung +
+      (r.solved !== null && r.minRung > r.solved
+        ? ', raised from the solved ' + r.solved + '.'
+        : ', confirming the solved rung.');
+  } else {
+    msg.className = 'msg bad';
+    msg.textContent = (r && r.error) || 'could not record it';
+    btn.disabled = false;
+  }
 }
 const applyUpgrades = () => MapEditorPlay.apply(window, upValues);
 

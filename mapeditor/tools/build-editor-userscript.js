@@ -141,6 +141,13 @@ function main() {
     description: 'Build, play and share custom Johnny Upgrade levels in the browser. Includes the custom-level runtime and level select.',
     title: 'Johnny Upgrade — Levels & Editor',
     extraModules: [
+      /*
+       * The difficulty ladder, verbatim from the solver. It is pure data and
+       * arithmetic with no requires, and bundling the real file rather than a
+       * transcription is the point: "rung 12" has to mean one thing, and the
+       * editor's rung reference is the place someone would read it from.
+       */
+      { label: 'solver/ladder.js', src: fs.readFileSync(path.join(HERE, '..', '..', 'solver', 'ladder.js'), 'utf8') },
       { label: 'mapeditor/editor/editor-core.js', src: fs.readFileSync(path.join(EDITOR, 'editor-core.js'), 'utf8') },
       { label: 'mapeditor/editor/editor-host.js', src: fs.readFileSync(path.join(EDITOR, 'editor-host.js'), 'utf8') },
       { label: 'mapeditor/editor/editor-play.js', src: fs.readFileSync(path.join(EDITOR, 'editor-play.js'), 'utf8') },

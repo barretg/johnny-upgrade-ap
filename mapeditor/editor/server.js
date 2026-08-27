@@ -15,6 +15,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 
 const argv = process.argv.slice(2);
 /*
@@ -119,6 +120,167 @@ function listModules() {
 }
 
 /*
+ * Run the solver over one module and write the answer into its file.
+ *
+ * This is `node solver/solve-module.js <file> --write`, no more: the same tool, the
+ * same rules, the same output. It is spawned rather than required because
+ * solve-module.js derives its world from JU_MAP at require() time and would bind
+ * this server to one arena forever, and it is spawned ASYNCHRONOUSLY because a
+ * module takes seconds to tens of seconds and spawnSync would wedge the editor
+ * along with it.
+ *
+ * A solve that fails is reported as a failure, never as an absent record: the
+ * module file keeps whatever it had, and the editor shows the module as unsolved.
+ * Guessing in either direction is how an unbeatable map gets generated.
+ */
+const SOLVER = path.join(ROOT, '..', 'solver');
+const SOLVE_TIMEOUT_MS = 10 * 60 * 1000;
+
+function solveModule(name) {
+  return new Promise((resolve) => {
+    const file = path.join(MODULES, name + '.json');
+    if (!fs.existsSync(file)) return resolve({ ok: false, error: 'no such module' });
+    const script = path.join(SOLVER, 'solve-module.js');
+    if (!fs.existsSync(script)) return resolve({ ok: false, error: 'no solver alongside the editor' });
+
+    const child = spawn(process.execPath, [script, file, '--write'],
+      { cwd: SOLVER, encoding: 'utf8' });
+    let out = '', err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    const timer = setTimeout(() => { child.kill(); }, SOLVE_TIMEOUT_MS);
+    child.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, error: e.message }); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const text = (out + err).trim();
+      /*
+       * solve-module.js exits non-zero on a DISAGREEMENT with expect as well as on a
+       * failure -- that is the interesting output, not an error -- so the answer is
+       * read out of the module file rather than out of the exit code. No record
+       * written means it genuinely could not solve it.
+       */
+      let mod = null;
+      try { mod = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { /* reported below */ }
+      const solved = mod && mod.solve && typeof mod.solve.minRung === 'number';
+      console.log('solved module ' + name + ': ' + (solved ? 'rung ' + mod.solve.minRung : 'no answer') +
+        ' (exit ' + code + ')');
+      resolve({
+        ok: !!solved,
+        minRung: solved ? mod.solve.minRung : null,
+        exit: code,
+        output: text.split('\n').slice(-6).join('\n'),
+      });
+    });
+  });
+}
+
+/*
+ * Build a module's arena and write it where the level list can find it.
+ *
+ * `solve-module.js` already writes one every time it solves, but a module that has
+ * never been solved has none -- and an arena left over from before an edit is
+ * WORSE than none, because it would hand someone the old geometry to hand-test
+ * while the module file says something else. So this rebuilds from the module's
+ * current objects every time, and it is cheap: arena.js is geometry, not
+ * simulation.
+ */
+function buildModuleArena(name) {
+  const file = path.join(MODULES, name + '.json');
+  if (!fs.existsSync(file)) return { ok: false, error: 'no such module' };
+  try {
+    const { buildArena } = require(path.join(ROOT, '..', 'solver', 'arena.js'));
+    const mod = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!mod.name) mod.name = name;
+    const { id, map } = buildArena(mod);
+    fs.mkdirSync(MAPS, { recursive: true });
+    fs.writeFileSync(path.join(MAPS, id + '.json'), JSON.stringify(map, null, 1) + '\n');
+    console.log('built arena ' + id + ' for module ' + name);
+    return { ok: true, id };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/*
+ * Record that a person played this module and cleared it at a rung.
+ *
+ * The other half of the difficulty answer, and the half no simulator can give.
+ * Three rules, all enforced here rather than in the browser, because this is what
+ * actually writes the file:
+ *
+ *   * A verdict may only ever RAISE a rung. One BELOW the solved rung would mean a
+ *     person did what the simulator proved impossible -- a physics bug, not a
+ *     difficulty correction -- and quietly lowering a rung is how an unbeatable map
+ *     gets generated. Refused, loudly, with the reason.
+ *   * The hash covers GEOMETRY only, never settings. A person played the real game,
+ *     and the real game does not change when a discretization knob does. Hashing
+ *     settings here would throw away every verdict at the moment the solver was
+ *     corrected, which is when they are worth most.
+ *   * The block is written fresh, never edited, so `playedAt` always names the day
+ *     the rung in the file was actually played.
+ */
+async function recordHandPlay(name, verdict) {
+  const file = path.join(MODULES, name + '.json');
+  if (!fs.existsSync(file)) return { ok: false, error: 'no such module' };
+
+  let sm, ladder;
+  try {
+    sm = require(path.join(ROOT, '..', 'solver', 'solve-module.js'));
+    ladder = require(path.join(ROOT, '..', 'solver', 'ladder.js'));
+  } catch (e) {
+    return { ok: false, error: 'no solver alongside the editor: ' + e.message };
+  }
+
+  const rung = Number(verdict && verdict.minRung);
+  if (!Number.isInteger(rung) || rung < 0 || rung >= ladder.N_RUNGS) {
+    return { ok: false, error: 'minRung must be a rung between 0 and ' + (ladder.N_RUNGS - 1) };
+  }
+
+  const mod = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!mod.name) mod.name = name;
+  const solved = mod.solve && typeof mod.solve.minRung === 'number' ? mod.solve.minRung : null;
+  if (solved !== null && rung < solved) {
+    return {
+      ok: false,
+      error: 'Rung ' + rung + ' is BELOW the solved rung of ' + solved + '. That would mean a ' +
+        'person cleared what the simulator proved impossible, which is a bug in the physics ' +
+        'rather than a difficulty correction. Hand-play may only ever raise a rung -- fix the ' +
+        'simulator, or re-solve the module, before recording this.',
+    };
+  }
+
+  /*
+   * `attempts` and `trail` are the part of a verdict a rung alone cannot carry.
+   *
+   * A module cleared first go and one cleared on the twentieth try are the same
+   * rung and are not the same module, and the rungs that were tried and given up
+   * on are what makes the number trustworthy: they say the person walked up to it
+   * rather than starting there. Both are the person's own count -- nothing here
+   * infers an attempt from a death or a restart, because a restart is not
+   * reliably a failure.
+   */
+  const attempts = Number(verdict && verdict.attempts);
+  const trail = Array.isArray(verdict && verdict.trail)
+    ? verdict.trail
+        .filter((t) => t && Number.isInteger(Number(t.rung)))
+        .map((t) => ({ rung: Number(t.rung), attempts: Number(t.attempts) || 0, cleared: false }))
+    : [];
+  mod.handPlay = {
+    hash: sm.geometryHash(mod),
+    playedAt: new Date().toISOString().slice(0, 10),
+    minRung: rung,
+    why: String((verdict && verdict.why) || '').trim() ||
+      ('Played the module arena at rung ' + rung + ' and cleared it.'),
+  };
+  if (Number.isInteger(attempts) && attempts > 0) mod.handPlay.attempts = attempts;
+  if (trail.length) mod.handPlay.triedBelow = trail;
+  fs.writeFileSync(file, JSON.stringify(mod, null, 1) + '\n');
+  console.log('hand-play recorded for ' + name + ': rung ' + rung +
+    (solved !== null && rung > solved ? ' (raised from the solved ' + solved + ')' : ''));
+  return { ok: true, name, minRung: rung, solved };
+}
+
+/*
  * The vanilla map, straight from the data the solver already keeps verbatim.
  * Offered as a starting point so a new map can be built by editing something
  * that is known to work, rather than from nothing.
@@ -200,6 +362,25 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/modules') return json(res, 200, listModules());
 
+    if (req.method === 'POST' && p.startsWith('/api/arena/')) {
+      const name = p.slice('/api/arena/'.length);
+      if (!safeId(name)) return json(res, 400, { error: 'bad module name' });
+      return json(res, 200, buildModuleArena(name));
+    }
+
+    if (req.method === 'POST' && p.startsWith('/api/handplay/')) {
+      const name = p.slice('/api/handplay/'.length);
+      if (!safeId(name)) return json(res, 400, { error: 'bad module name' });
+      return json(res, 200, await recordHandPlay(name, JSON.parse(await body(req))));
+    }
+
+    if (req.method === 'POST' && p.startsWith('/api/solve/')) {
+      const name = p.slice('/api/solve/'.length);
+      if (!safeId(name)) return json(res, 400, { error: 'bad module name' });
+      console.log('solving module ' + name + '...');
+      return json(res, 200, await solveModule(name));
+    }
+
     if (p === '/' || p === '/index.html') {
       return send(res, 200, 'text/html; charset=utf-8', fs.readFileSync(path.join(__dirname, 'index.html')));
     }
@@ -257,6 +438,17 @@ const server = http.createServer(async (req, res) => {
      * sides need -- the editor loads it from there rather than keeping a copy,
      * because two copies of the map format would drift.
      */
+    /*
+     * The ladder, straight out of the solver. The editor's rung reference reads the
+     * real file rather than a transcription, so "rung 12" cannot come to mean two
+     * different things in two places.
+     */
+    if (p === '/solver/ladder.js') {
+      const f = path.join(SOLVER, 'ladder.js');
+      if (!fs.existsSync(f)) return send(res, 404, 'text/plain', 'no ladder');
+      return send(res, 200, 'application/javascript', fs.readFileSync(f));
+    }
+
     if (p.startsWith('/mapkit/') || p.startsWith('/lib/')) {
       const dir = p.startsWith('/mapkit/') ? path.join(ROOT, '..', 'mapkit') : path.join(ROOT, 'lib');
       const f = path.join(dir, path.basename(p));

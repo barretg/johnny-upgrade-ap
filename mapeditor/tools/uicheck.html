@@ -18,6 +18,7 @@
 <div id="host"></div>
 <pre id="out"></pre>
 <script src="../../mapkit/mapformat.js"></script>
+<script src="../../solver/ladder.js"></script>
 <script src="../editor/editor-core.js"></script>
 <script>
 const log = [];
@@ -36,7 +37,17 @@ const MODFIX = {
   solve: { hash:'aaaa', minRung: 8, frames: 120 },
   handPlay: { hash:'bbbb', minRung: 12, why: 'played' },
 };
+// a second module with no answer at all, to check that "hand-test" is offered only
+// where there is a rung to make a claim about
+const MODUNSOLVED = {
+  name: 'stub-new', version: 1, tags: ['fresh'],
+  objects: [ { kind:'plat', x:0, y:0, w:400, h:100 } ],
+  size: { w:400, h:100 }, entry: { x:0, y:0 }, exit: { x:400, y:0 },
+};
 let savedModule = null;
+const solveCalls = [];
+const arenaCalls = [];
+const playCalls = [];
 
 const io = {
   storageKey: 'harness',
@@ -45,8 +56,11 @@ const io = {
   saveMap: async () => ({ ok: true }),
   tiles: async () => [],
   tileImage: () => null,
-  listModules: async () => [JSON.parse(JSON.stringify(MODFIX))],
+  listModules: async () => [JSON.parse(JSON.stringify(MODFIX)), JSON.parse(JSON.stringify(MODUNSOLVED))],
   saveModule: async (name, m) => { savedModule = m; return { ok: true, name }; },
+  solveModule: async (name) => { solveCalls.push(name); return { ok: true, minRung: 8 }; },
+  moduleArena: async (name) => { arenaCalls.push(name); return { ok: true, id: 'module-' + name }; },
+  play: (id, opts) => { playCalls.push({ id, opts }); },
 };
 MapEditor.mount({ root: document.getElementById('host'), io });
 
@@ -230,8 +244,14 @@ function run() {
  */
 function modules() {
   deselect();
-  const modRow = document.querySelectorAll('#mde-modlist .mod')[0];
+  const modRow = [...document.querySelectorAll('#mde-modlist .mod')]
+    .find((r) => r.dataset.module === 'stub-gap');
   ok(!!modRow, 'the module panel lists the library');
+  ok(document.querySelectorAll('#mde-modlist .mod').length === 2, 'both modules',
+     document.querySelectorAll('#mde-modlist .mod').length);
+  ok(/unsolved/.test([...document.querySelectorAll('#mde-modlist .mod')]
+      .find((r) => r.dataset.module === 'stub-new').textContent),
+     'a module with no record reads as unsolved, not as rung 0');
   ok(modRow && /rung 12/.test(modRow.textContent),
      'the badge shows max(solve, handPlay), not the solved rung',
      modRow && modRow.textContent.replace(/\s+/g, ' '));
@@ -310,8 +330,27 @@ function modules() {
      'entry and exit derive to the leftmost and rightmost top surface',
      dlg && JSON.stringify([dlg.entry, dlg.exit]));
 
+  /*
+   * Solve-on-save. The box is only meaningful when a solve is actually needed: an
+   * unchanged module keeps its record, and re-solving it would spend tens of
+   * seconds writing down the number already in the file.
+   */
+  q('modpanel').querySelectorAll('input')[0].value = 'stub-gap';
+  q('modpanel').querySelectorAll('input')[0].dispatchEvent(new Event('input', { bubbles:true }));
+  ok(q('modpanel').querySelectorAll('input')[1].value === 'gap, jump',
+     'typing the name of an existing module adopts its tags, rather than blanking them',
+     q('modpanel').querySelectorAll('input')[1].value);
+  const cb = document.querySelector('#mde-modsolve');
+  ok(!!cb, 'the save dialog offers to run the solver');
+  ok(cb && cb.disabled && !cb.checked,
+     'and it is off and disabled for a save that keeps the existing record',
+     cb && [cb.disabled, cb.checked]);
+  ok(/already solved at rung 8/i.test(document.querySelector('#mde-modsolvetxt').textContent),
+     'saying why', document.querySelector('#mde-modsolvetxt').textContent.slice(0, 40));
+
   saveDialogAs('stub-gap');
   setTimeout(() => {
+    ok(solveCalls.length === 0, 'an unchanged module is not re-solved', solveCalls.join());
     ok(savedModule && JSON.stringify(savedModule.objects) === JSON.stringify(MODFIX.objects),
        'a drop and a save give back the same geometry, at the origin',
        savedModule && JSON.stringify(savedModule.objects));
@@ -324,14 +363,23 @@ function modules() {
     savedModule = null;
     live.sort((a, b) => a.x - b.x)[1].x += 300;
     q('modsave').click();
+    q('modpanel').querySelectorAll('input')[0].value = 'stub-gap';
+    q('modpanel').querySelectorAll('input')[0].dispatchEvent(new Event('input', { bubbles:true }));
+    const cb2 = document.querySelector('#mde-modsolve');
+    ok(cb2 && !cb2.disabled && cb2.checked,
+       'a save that drops the record offers the solver, ticked by default',
+       cb2 && [cb2.disabled, cb2.checked]);
     saveDialogAs('stub-gap');
     setTimeout(() => {
       ok(savedModule && !savedModule.solve && !savedModule.handPlay,
          'changed geometry drops the solve record and the hand-play verdict');
       ok(savedModule && !!savedModule.expect,
          'but keeps expect, which is hand-written and cannot be regenerated');
-      finish();
-    }, 20);
+      ok(solveCalls.length === 1 && solveCalls[0] === 'stub-gap',
+         'and the solver is run on it, so the library is never left holding an unsolved module',
+         solveCalls.join());
+      handTestUI();
+    }, 30);
   }, 20);
 }
 
@@ -339,6 +387,73 @@ function modules() {
 function selBox(b) {
   document.querySelector('#mde-tools button[data-tool="select"]').click();
   drag(...w2s(b.x - 60, b.y - 60), ...w2s(b.x + b.w + 60, b.y + b.h + 60));
+}
+
+/*
+ * Hand-testing: how a module gets marked as played by a person.
+ *
+ * The button is offered only where there is a rung to make a claim ABOUT, it
+ * rebuilds the arena before launching (an arena left over from before an edit
+ * would be the wrong geometry to play), and it launches at the EFFECTIVE rung --
+ * max(solve, handPlay) -- because that is the number the module is worth.
+ */
+function handTestUI() {
+  const rows = document.querySelectorAll('#mde-modlist .mod');
+  const solvedRow = [...rows].find((r) => r.dataset.module === 'stub-gap');
+  const freshRow = [...rows].find((r) => r.dataset.module === 'stub-new');
+  const btn = [...solvedRow.querySelectorAll('button')].find((b) => /hand-test/.test(b.textContent));
+  ok(!!btn, 'a module with a rung offers a hand-test');
+  ok(btn && /again/.test(btn.textContent),
+     'and says "again" for one already played, since re-playing is worth it after a solver fix',
+     btn && btn.textContent);
+  ok(![...freshRow.querySelectorAll('button')].some((b) => /hand-test/.test(b.textContent)),
+     'an unsolved module offers none: there is no rung to make a claim about');
+
+  btn.click();
+  setTimeout(() => {
+    ok(arenaCalls.length === 1 && arenaCalls[0] === 'stub-gap',
+       'the arena is rebuilt before playing, so the geometry tested is the geometry saved',
+       arenaCalls.join());
+    ok(playCalls.length === 1 && playCalls[0].id === 'module-stub-gap',
+       'and that arena is what gets played', JSON.stringify(playCalls[0]));
+    ok(playCalls[0].opts && playCalls[0].opts.module === 'stub-gap' && playCalls[0].opts.rung === 12,
+       'at the effective rung (12: hand-played), not the solved rung (8)',
+       JSON.stringify(playCalls[0].opts));
+    ok(!S().armed, 'and clicking hand-test does not arm the module for placement');
+    ok(playCalls[0].opts.from === ((S().meta && S().meta.id) || ''),
+       'and it carries the map being edited, so "back to editor" returns to the work ' +
+       'rather than to the throwaway arena',
+       JSON.stringify(playCalls[0].opts.from));
+    rungRef();
+  }, 20);
+}
+
+/*
+ * The rung reference. Every number in it is a fact about a rung, so the test is
+ * that the table is really the ladder -- one row per rung, in order -- rather than
+ * that it looks a certain way. The two derived columns are checked in
+ * test-geometry.js against solver/physics.js itself.
+ */
+function rungRef() {
+  q('rungref').click();
+  const panel = q('rungs');
+  ok(getComputedStyle(panel).display !== 'none', 'the rung reference opens',
+     getComputedStyle(panel).display);
+  const rows = panel.querySelectorAll('table tr');
+  ok(rows.length === Ladder.N_RUNGS + 1, 'with one row per rung plus a header',
+     rows.length + ' of ' + (Ladder.N_RUNGS + 1));
+  const first = rows[1].querySelectorAll('td');
+  ok(first[0].textContent === '0' && first[2].textContent === '0' && first[5].textContent === '1',
+     'rung 0 is nothing bought and one heart',
+     [...first].map((c) => c.textContent).join('|'));
+  const r14 = [...rows[15].querySelectorAll('td')].map((c) => c.textContent);
+  ok(r14[0] === '14' && r14[2] === '5' && r14[3] === '5' && r14[4] === 'yes',
+     'and rung 14 is spd5/jmp5 with the double jump, as ladder.js has it', r14.join('|'));
+  ok(/no "gap this clears"/i.test(panel.textContent),
+     'it says why there is no reach column, since that is the number an author would want');
+  document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true }));
+  ok(getComputedStyle(panel).display === 'none', 'and escape closes it');
+  finish();
 }
 
 function saveDialogAs(name) {

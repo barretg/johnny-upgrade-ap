@@ -403,12 +403,109 @@ sha1 in a browser. Two consequences worth knowing:
   `solve-module.js --write`'s own formatting, so a real diff is always a real
   change.
 
-Storage is `io.listModules()` / `io.saveModule()`, alongside the map io. On the
-dev server those are the files in `mapeditor/modules/`, served through the
-solver's own `readModule()` so a record that has gone stale is already gone
-before it reaches a badge. In the userscript they are localStorage, plus an
-**export** link per module -- nothing in a browser can *solve* a module, so one
-saved in the game page stays unsolved until its file reaches
+### Solving on save
+
+A module with no `solve` record is a module the generator cannot use, and the gap
+between saving one and remembering to solve it is where an unsolved library comes
+from -- so the save dialog runs the solver by default, and the checkbox is how to
+say no. It appears only where solving is possible (the dev server: solving is
+node, and the userscript has none) and it is disabled where a solve is not
+*needed* -- an unchanged module keeps its record, and re-solving would spend tens
+of seconds writing down the number already in the file.
+
+The solve runs **after** the save and does not hold the dialog open: it is seconds
+to a minute per module, and a modal that sits there for a minute gets cancelled.
+The row carries the state instead -- the badge turns amber and reads `solving...`,
+and the library refreshes when the answer lands, so a stale rung is never on
+screen while the right one is being computed. The endpoint is
+`POST /api/solve/<name>`, which is `node solver/solve-module.js <file> --write`
+spawned asynchronously; the answer is read back out of the module file rather than
+from the exit code, because `solve-module.js` exits non-zero on a *disagreement
+with `expect`* as well as on a failure, and a disagreement is the interesting
+output rather than an error. A solve that produces nothing is reported as a
+failure and the module stays unsolved -- never guessed in either direction.
+
+### Hand-testing: how a module gets marked as played by a person
+
+The solver answers *physically possible*. A person answers *humanly executable*,
+and until someone has, a module is solved but not trusted. The **hand-test**
+button on a module's row is that loop:
+
+1. It **rebuilds the arena** from the module's current geometry -- `solve-module.js`
+   writes one whenever it solves, but an arena left over from before an edit is
+   worse than none, since it would hand you the old geometry to play while the
+   verdict got recorded against the new one. Rebuilding is geometry, not
+   simulation, so it is free.
+2. It opens that arena in the quick-run page with the sliders **pinned to the
+   rung**: `spd`, `jmp`, `jmp2`, `nrg`, `wpn` and `ammo` straight off
+   `solver/ladder.js`, and the three tracks the ladder does not carry pinned to
+   what keeps the test honest -- **Time Limit maxed** (the timer is the map-level
+   budget Phase 4 spends, not an ability; a test the clock ended would be a test of
+   the clock), **Gun Power 0** (it scales the bullet's collision box and the solver
+   models the base one, so more would make a must-shoot route easier than the run
+   that was solved) and **Coin Multiplier 0**. Moving a slider *voids* the test
+   until it is put back -- a verdict is a claim about a rung.
+3. You play it, and record the verdict **there**, next to the act: "did I actually
+   clear that" is a question with a short memory, and a loop that ends in a
+   different tab ends with nobody writing anything down.
+
+**Failing is not the same as impossible**, and the bar is built around that. Three
+buttons: *cleared it on attempt N*, *that attempt failed -- try again* (which
+counts the attempt and restarts, staying on the rung), and *give up on rung N --
+move to rung N+1*. Only the last one moves, and only when you have decided the
+rung genuinely is not enough: a rung raised on the first death grades the module
+harder than it is, a library of over-graded modules builds a map padded with
+upgrades nobody needed, and a verdict can never be lowered afterwards.
+
+The attempt count is **manual**. A restart is not reliably a failure -- you restart
+to re-run an approach, or to look at something again -- and a number inferred from
+ambiguous events would be worse than your own claim. What gets written is
+`handPlay.attempts` and `handPlay.triedBelow`, the rungs tried and given up on
+along the way. A module cleared first go and one cleared on the twentieth try are
+the same rung and are not the same module.
+
+The **rules are enforced by the server**, not the browser, because the server is
+what writes the file: a rung off the ladder is refused, and a verdict *below* the
+solved rung is refused loudly -- that would mean a person did what the simulator
+proved impossible, which is a physics bug rather than a difficulty correction. The
+block is written fresh each time rather than edited, so `playedAt` always names
+the day the rung in the file was actually played, and it carries the **geometry**
+hash so correcting the simulator cannot wipe it.
+
+None of this exists in the userscript: there is no server to record against, so a
+module played on coolmathgames has to be recorded from the dev server.
+
+### The rung reference
+
+The **rung reference** button opens the whole of `solver/ladder.js` as a table: 37
+rungs, what each one adds, and the tiers it carries -- speed, jump, double jump,
+hearts, gun, ammo and the shots that ammo actually loads. Plus the two quantities
+those tiers turn into: terminal run speed in px per frame, and how high one jump
+reaches (and that doubled, for a second jump spent at the apex).
+
+There is deliberately **no "gap this clears" column**. Horizontal reach depends on
+the run-up, the headroom and where the double jump is spent, and a plausible
+number in a panel would be trusted at a glance -- that is what solving a module
+answers, and what Phase 7's two-point probe will answer for two points.
+
+The ladder is the **real solver file**, UMD-wrapped and either served from
+`/solver/ladder.js` or bundled into the userscript. A transcription would be a
+second answer to "what does rung 12 mean", which is the one thing that file exists
+to prevent. The two derived numbers *are* transcribed from `solver/physics.js`
+(which is node-only, since it pulls its map in at require time), and
+`tools/test-geometry.js` holds them against the real `moveAccel`/`jumpImpulse` on
+every run, plus against a solved boundary: `ledge-tall` is a 270px step that
+solves at rung 14 and not at rung 13, and the table's jump numbers have to land on
+the same side of that.
+
+### Storage
+
+`io.listModules()` / `io.saveModule()` / `io.solveModule()`, alongside the map io.
+On the dev server those are the files in `mapeditor/modules/`, served through the
+solver's own `readModule()` so a record that has gone stale is already gone before
+it reaches a badge. In the userscript the first two are localStorage and the third
+is absent, plus an **export** link per module -- nothing in a browser can *solve* a
+module, so one saved in the game page stays unsolved until its file reaches
 `solver/solve-module.js`.
 
 ## Runtime architecture

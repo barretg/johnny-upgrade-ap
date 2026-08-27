@@ -1750,6 +1750,150 @@
 }));
 
 
+/* ===== solver/ladder.js ===== */
+// The difficulty ladder: one ordered chain through the ability lattice.
+//
+// The generator, the module solver and the verifier all speak in rungs, and they must all mean
+// the same thing by "rung 12", so the order lives here and nowhere else.
+//
+// A rung is a full combo (speed, jump, doubleJump, energy, ammo, gun). Rung k+1 is rung k plus
+// exactly one item, so rung k+1 dominates rung k on every axis and never loses ground on any.
+// That is what makes a binary search for "the first rung that clears this module" valid under
+// the monotone-closure guarantee the whole solver rests on: reachable at a combo implies
+// reachable at every combo above it, so the set of rungs that clear a module is an up-set and
+// has exactly one boundary to find.
+//
+// Rung 0 is the start of a run: nothing bought. moveAccel(0) is 0 and jumpImpulse(0) is null, so
+// at rung 0 Johnny can neither walk nor jump -- a module that needs any movement at all comes
+// out at rung 1 or above, and only a module whose exit is already inside the spawn box solves at
+// rung 0. That is intentional: it makes "rung 0 clears it" a genuine signal that a module is
+// degenerate rather than easy.
+//
+// The item pool the logic can see, and which the 36 steps below spend exactly once each:
+//   Speed 10, Jump 10, Double Jump 1, Energy 4 (5 hearts total, base 1), Laser Gun 1, Ammo 10.
+//
+// Loads as a CommonJS module in node and as a plain script in the browser, the same way
+// mapkit/mapformat.js does. The map editor shows this table as its rung reference, and a second
+// copy of the ladder -- generated, transcribed, whatever -- would be a second answer to "what
+// does rung 12 mean", which is the one thing this file exists to prevent. It is pure data and
+// arithmetic with no requires, so sharing it costs nothing.
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.Ladder = factory();
+}(typeof self !== 'undefined' ? self : this, function () {
+'use strict';
+
+// The order the items are spent in. This is a design choice, not a derivation: it is the shape
+// the generated map's progression will have, so it interleaves the two movement tracks, holds
+// Double Jump back until a couple of tiers of each are in, and spreads Energy across the run
+// rather than front-loading it.
+//
+// The gun and Ammo 1 are adjacent on purpose. The game gives you bullets as
+// getGun() -> Math.round(ammo.v * 20), so the gun with Ammo 0 fires nothing; the simulator sees
+// no difference between "no gun" and "gun, no ammo", which means a module that needs to shoot
+// comes out at the Ammo 1 rung. Both stay listed because both are real items in the pool.
+const TRACKS = [
+  'speed', 'jump', 'speed', 'jump', 'energy',
+  'speed', 'jump', 'doubleJump', 'speed', 'jump',
+  'gun', 'ammo', 'speed', 'jump', 'energy',
+  'ammo', 'speed', 'jump', 'ammo', 'speed',
+  'jump', 'energy', 'ammo', 'speed', 'jump',
+  'ammo', 'speed', 'jump', 'energy', 'ammo',
+  'speed', 'jump', 'ammo', 'ammo', 'ammo', 'ammo',
+];
+
+const POOL = { speed: 10, jump: 10, doubleJump: 1, energy: 4, gun: 1, ammo: 10 };
+
+// Fail loudly rather than generating a map against a ladder that spends the wrong items: this
+// list is edited by hand and a typo in it is invisible everywhere downstream.
+{
+  const spent = {};
+  for (const t of TRACKS) spent[t] = (spent[t] || 0) + 1;
+  for (const k of Object.keys(POOL)) {
+    if (spent[k] !== POOL[k]) {
+      throw new Error(`ladder.js spends ${spent[k] || 0} ${k}, but the item pool has ${POOL[k]}`);
+    }
+  }
+  for (const k of Object.keys(spent)) {
+    if (!(k in POOL)) throw new Error(`ladder.js spends an item the pool does not have: ${k}`);
+  }
+}
+
+// Rung 0 = nothing, then one entry per item.
+const RUNGS = [];
+{
+  // `energy` is TOTAL hearts, matching fastsim's energyTier -- 1 is the base heart, so the four
+  // Energy items take it to 5.
+  const at = { speed: 0, jump: 0, doubleJump: 0, energy: 1, gun: 0, ammo: 0 };
+  RUNGS.push({ index: 0, gained: null, ...at });
+  TRACKS.forEach((track, n) => {
+    at[track]++;
+    RUNGS.push({ index: n + 1, gained: track, ...at });
+  });
+}
+
+const N_RUNGS = RUNGS.length; // 37: rung 0 plus one per item
+
+/**
+ * The options a rung means to fastsim's `search`.
+ *
+ * `gun` does not appear: search() takes only ammoTier and treats any ammoTier > 0 as "has the
+ * gun", which is exactly the game's behaviour (no ammo, no shots). A caller that wants to know
+ * whether a rung has the gun item reads rung.gun.
+ */
+function searchOpts(rung) {
+  return {
+    spdTier: rung.speed,
+    jmpTier: rung.jump,
+    doubleJump: !!rung.doubleJump,
+    energyTier: rung.energy,
+    ammoTier: rung.ammo,
+  };
+}
+
+/** Short human label, e.g. "12 spd4/jmp4/dj1/e2/ammo1". */
+function label(rung) {
+  return (
+    `${rung.index} spd${rung.speed}/jmp${rung.jump}/dj${rung.doubleJump}` +
+    `/e${rung.energy}/ammo${rung.ammo}`
+  );
+}
+
+/**
+ * Binary search for the lowest rung at which `clears(rung)` is true.
+ *
+ * Valid only because the ladder is a chain: `clears` must be monotone, false up to some point
+ * and true from there on. `clears` returns true, false, or null for "this run could not tell"
+ * (a search that hit its frame or hash cap proves nothing) -- an unknown answer aborts rather
+ * than being guessed in either direction, since guessing "clears" is the direction that
+ * generates an unbeatable map.
+ *
+ * Returns { minRung, probed } or { minRung: null, probed, unknownAt } if it could not decide.
+ */
+function findMinRung(clears) {
+  const probed = [];
+  let lo = 0; // known-or-assumed floor
+  let hi = N_RUNGS - 1;
+  // The top rung has every item there is; if it cannot clear the module, nothing can.
+  const top = clears(RUNGS[hi]);
+  probed.push(hi);
+  if (top === null) return { minRung: null, probed, unknownAt: hi };
+  if (top === false) return { minRung: null, probed, unclearable: true };
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const r = clears(RUNGS[mid]);
+    probed.push(mid);
+    if (r === null) return { minRung: null, probed, unknownAt: mid };
+    if (r) hi = mid;
+    else lo = mid + 1;
+  }
+  return { minRung: lo, probed };
+}
+
+return { RUNGS, N_RUNGS, TRACKS, POOL, searchOpts, label, findMinRung };
+}));
+
+
 /* ===== mapeditor/editor/editor-core.js ===== */
 /*
  * The map editor, as a mountable module.
@@ -1786,6 +1930,12 @@
  *   listModules()              -> the module library, whole records (optional)
  *   saveModule(name, mod)      -> { ok } (optional; the panel needs both)
  *   exportModule(name, mod)    -> hand a module out as a file (optional)
+ *   solveModule(name)          -> run the solver over a saved module and write the
+ *                                 answer into it (optional; node only)
+ *   moduleArena(name)          -> build that module's playable arena, -> { ok, id }
+ *                                 (optional; node only)
+ *   play(id, opts)             -> run a map; opts.module/opts.rung turn it into a
+ *                                 hand-test at that rung
  *   play(id)                   -> run the map (optional; Play hides without it)
  *   exit()                     -> leave the editor (optional; Close hides)
  *   storageKey                 -> localStorage namespace for session state
@@ -2035,11 +2185,38 @@ const CSS = `
 #mde-modpanel { position:absolute; right:10px; top:10px; width:252px; z-index:5;
   background:#1c1f28f2; border:1px solid var(--line); border-radius:8px; padding:10px 11px;
   display:none; }
+/*
+ * The rung reference. A wide scrolling table rather than a squeezed sidebar list:
+ * it is read by scanning a column -- "which rung first has jmp5" -- and a column
+ * you cannot see the whole of answers nothing.
+ */
+#mde-rungs { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:6;
+  width:min(720px, 92%); max-height:82%; overflow:auto; display:none;
+  background:#161922f5; border:1px solid var(--line); border-radius:9px; padding:0; }
+#mde-rungs .hd { position:sticky; top:0; background:#1c1f28; border-bottom:1px solid var(--line);
+  padding:9px 12px; display:flex; align-items:baseline; gap:10px; }
+#mde-rungs .hd h3 { margin:0; font-size:12px; }
+#mde-rungs .hd .mde-sp { flex:1; }
+#mde-rungs table { border-collapse:collapse; width:100%;
+  font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+#mde-rungs th { position:sticky; top:37px; background:#1c1f28; color:var(--dim); font-weight:600;
+  text-align:right; padding:4px 8px; font-size:10px; border-bottom:1px solid var(--line); }
+#mde-rungs th:first-child, #mde-rungs td:first-child { text-align:left; }
+#mde-rungs td { padding:2px 8px; text-align:right; border-bottom:1px solid #21252f; }
+#mde-rungs tr.got td { color:var(--text); }
+#mde-rungs tr.here td { background:#2b3346; }
+#mde-rungs td.gain { color:var(--good); text-align:left; }
+#mde-rungs .foot { padding:9px 12px; color:var(--dim); font-size:10px; line-height:1.5;
+  border-top:1px solid var(--line); }
 #mde-modpanel h3 { margin:0 0 8px; font-size:11px; text-transform:uppercase;
   letter-spacing:.07em; color:var(--dim); }
 #mde-modpanel .pair { display:grid; grid-template-columns:40px 1fr 12px 1fr; gap:5px;
   align-items:center; margin-bottom:5px; color:var(--dim); font-size:11px; }
 #mde-modpanel .btns { display:flex; gap:6px; margin-top:9px; }
+#mde-modpanel .chk { display:flex; gap:6px; align-items:flex-start; margin:8px 0 0;
+  color:var(--dim); font-size:11px; line-height:1.4; }
+#mde-modpanel .chk input { margin:2px 0 0; }
+#mde-root .mod .rung.busy { background:#2a2519; color:var(--warn); }
 `;
 
 const HTML = `
@@ -2079,6 +2256,7 @@ const HTML = `
     <h2>Modules</h2>
     <div id="mde-modlist"></div>
     <button id="mde-modsave" style="width:100%;margin-top:6px">save selection as module…</button>
+    <button id="mde-rungref" style="width:100%;margin-top:5px">rung reference</button>
     <div class="muted" style="margin-top:5px" id="mde-modhint">Pick a module, then click the canvas to place it.</div>
   </div>
 </aside>
@@ -2086,6 +2264,7 @@ const HTML = `
 <div id="mde-stage">
   <canvas id="mde-cv"></canvas>
   <div id="mde-modpanel"></div>
+  <div id="mde-rungs"></div>
   <div id="mde-hud"></div>
   <div id="mde-hint">
     <div><kbd>ctrl+click</kbd> pick object + its settings</div>
@@ -2133,6 +2312,7 @@ let dragging = null, spaceDown = false;
 let artOnTop = true;
 let moduleLib = [];   // the library as io handed it over: whole records, stale parts already gone
 let pendingModule = null; // a module armed for placement, waiting for a click on the canvas
+let solving = new Set();  // module names the solver is currently running on
 let modDialog = null; // an open "save as module" dialog, with its entry/exit markers on the canvas
 let rafId = null;
 const listeners = [];   // [target, type, fn, opts], for destroy()
@@ -2493,12 +2673,146 @@ function drawModuleGhost() {
   ctx.restore();
 }
 
+/*
+ * What a rung MEANS, in the numbers the game runs on.
+ *
+ * These three are the whole of the ability model that geometry cares about, and
+ * they are transcribed from `solver/physics.js` -- `moveAccel`, `jumpImpulse`, and
+ * the frame order of `controls()` then `vy += GRAVITY; y += vy`. Transcribed and
+ * not imported because physics.js pulls its map in at require() time and is node
+ * only; `tools/test-geometry.js` asserts these against the real functions on every
+ * run, so the copy cannot drift silently.
+ */
+const moveAccel = (spd) => (spd <= 0 ? 0 : 0.8 + 0.2 * spd);
+const jumpImpulse = (jmp) => (jmp <= 0 ? null : 1.1 * jmp + 12);
+/*
+ * How high one jump goes, in world pixels.
+ *
+ * The jump sets vy = -J, and every frame after that adds gravity BEFORE moving --
+ * so the first frame rises J-1, not J. Summing until vy turns positive gives
+ * n*J - n*(n+1)/2 for n = floor(J), which is the closed form the module set's
+ * hand predictions were made with. Checked against a real boundary: ledge-tall is
+ * a 270px step and solves at rung 14 (jmp5, rise 144.5, doubled 289) and not at
+ * rung 13 (jmp4, 126.4, doubled 252.8).
+ */
+function jumpRise(jmp) {
+  const J = jumpImpulse(jmp);
+  if (J === null) return 0;
+  const n = Math.floor(J);
+  return n * J - (n * (n + 1)) / 2;
+}
+
+/*
+ * The rung reference.
+ *
+ * Every number here is a FACT about a rung -- the tiers it carries and the two
+ * quantities they turn into. There is deliberately no "how wide a gap this
+ * clears": horizontal reach depends on run-up, ceilings and where the double jump
+ * is spent, and a plausible number in a panel would be trusted at a glance. That
+ * question is what solving a module answers, and what Phase 7's traversal probe
+ * will answer for two points.
+ */
+function toggleRungRef() {
+  const el = $('rungs');
+  if (!el) return;
+  if (el.style.display === 'block') { el.style.display = 'none'; return; }
+  renderRungRef();
+  el.style.display = 'block';
+}
+
+function renderRungRef() {
+  const el = $('rungs');
+  if (!el || typeof Ladder === 'undefined') {
+    if (el) el.innerHTML = '<div class="foot">The ladder is not loaded in this build.</div>';
+    return;
+  }
+  // the rung of whatever module is armed, so the table lands on something useful
+  const here = pendingModule ? moduleRung(pendingModule).rung : null;
+  const cols = [
+    ['rung', (r) => r.index],
+    ['gains', (r) => r.gained || '—'],
+    ['spd', (r) => r.speed],
+    ['jmp', (r) => r.jump],
+    ['dj', (r) => (r.doubleJump ? 'yes' : '—')],
+    ['hearts', (r) => r.energy],
+    ['gun', (r) => (r.gun ? 'yes' : '—')],
+    ['ammo', (r) => r.ammo],
+    ['shots', (r) => Math.round(r.ammo * 0.1 * 20)],
+    ['run px/f', (r) => (4 * moveAccel(r.speed)).toFixed(1)],
+    ['jump px', (r) => (r.jump ? jumpRise(r.jump).toFixed(0) : '—')],
+    ['+dj px', (r) => (r.jump && r.doubleJump ? (2 * jumpRise(r.jump)).toFixed(0) : '—')],
+  ];
+  const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  let html = '<div class="hd"><h3>Rung reference</h3><span class="muted">' +
+    Ladder.N_RUNGS + ' rungs; each one adds exactly one item</span>' +
+    '<span class="mde-sp"></span><button id="mde-rungclose">close</button></div><table><tr>' +
+    cols.map((c) => '<th>' + esc(c[0]) + '</th>').join('') + '</tr>';
+  for (const r of Ladder.RUNGS) {
+    const cls = (r.index === here ? 'here ' : '') + (r.index > 0 ? 'got' : '');
+    html += '<tr class="' + cls + '">' +
+      cols.map((c, i) => '<td' + (i === 1 ? ' class="gain"' : '') + '>' + esc(c[1](r)) + '</td>').join('') +
+      '</tr>';
+  }
+  html += '</table><div class="foot">' +
+    '<b>run px/f</b> is terminal horizontal speed: velocity gains the accel each frame and keeps ' +
+    '80% of it, so it settles at 4x the accel. <b>jump px</b> is how high one jump reaches from a ' +
+    'standstill, and <b>+dj px</b> is that doubled -- what a second jump spent exactly at the apex ' +
+    'buys, so it is a ceiling rather than a promise.<br>' +
+    'There is no "gap this clears" column on purpose. Horizontal reach depends on the run-up, the ' +
+    'headroom and where the double jump is spent, and a number here would be trusted at a glance. ' +
+    'That is what solving a module answers.<br>' +
+    '<b>shots</b> is what the gun is loaded with: the game does <code>round(ammo.v * 20)</code>, ' +
+    'so the gun with Ammo 0 fires nothing and the simulator cannot tell it from having no gun.' +
+    '</div>';
+  el.innerHTML = html;
+  const close = root.querySelector('#mde-rungclose');
+  if (close) close.onclick = () => { el.style.display = 'none'; };
+}
+
+/*
+ * Launch a hand-test.
+ *
+ * The arena is REBUILT first, every time. solve-module.js writes one when it
+ * solves, but an arena left over from before an edit is worse than none: it would
+ * hand someone the old geometry to play while the module file says something
+ * else, and the verdict would be recorded against the new one. Rebuilding is
+ * geometry, not simulation, so it costs nothing.
+ *
+ * The verdict itself is recorded on the play page rather than here -- "did I
+ * actually clear that" has a short memory, and a loop that ends in another tab
+ * ends with nobody writing anything down.
+ */
+async function handTest(m) {
+  const rung = moduleRung(m).rung;
+  if (rung === null) return;
+  let built = null;
+  try { built = await io.moduleArena(m.name); }
+  catch (e) { built = { ok: false, error: e.message }; }
+  if (!built || !built.ok) {
+    alert('Could not build the arena for "' + m.name + '".\n\n' +
+          ((built && built.error) || 'no reason given'));
+    return;
+  }
+  // the arena is a detour, not a destination: hand the play page the map that was
+  // open so "back to editor" returns to the work, not to the module's test box
+  io.play(built.id, { module: m.name, rung, from: (map.meta && map.meta.id) || '' });
+}
+
 // ---------------------------------------------------------------- module panels
 function moduleSectionVisible() {
   const sec = $('modsec');
   if (!sec) return false;
   const on = !!(io.listModules && io.saveModule);
-  sec.style.display = on ? '' : 'none';
+  /*
+   * The rung reference lives in this section and needs no library at all -- it is
+   * the ladder, which is bundled -- so the section stays even where modules cannot
+   * be stored. Only the parts that need io go away.
+   */
+  sec.style.display = (on || typeof Ladder !== 'undefined') ? '' : 'none';
+  for (const id of ['modlist', 'modsave', 'modhint']) {
+    const el = $(id);
+    if (el) el.style.display = on ? '' : 'none';
+  }
   return on;
 }
 
@@ -2536,7 +2850,8 @@ function buildModuleList() {
     const top = document.createElement('div'); top.className = 'top';
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = m.name;
     const badge = document.createElement('span'); badge.className = 'rung';
-    if (r.conflict) { badge.classList.add('bad'); badge.textContent = 'rung ' + r.rung + ' ?'; }
+    if (solving.has(m.name)) { badge.classList.add('busy'); badge.textContent = 'solving…'; }
+    else if (r.conflict) { badge.classList.add('bad'); badge.textContent = 'rung ' + r.rung + ' ?'; }
     else if (r.rung === null) { badge.classList.add('none'); badge.textContent = 'unsolved'; }
     else { badge.classList.add(r.played ? 'played' : 'solved'); badge.textContent = 'rung ' + r.rung; }
     top.appendChild(nm); top.appendChild(badge);
@@ -2559,7 +2874,24 @@ function buildModuleList() {
         : '\nrung ' + r.rung + ' -- solved only: physically possible, never played by a person.') +
       '\n\nClick to pick it up, then click the canvas to place it.';
     d.dataset.module = m.name;
-    d.onclick = () => armModule(m);
+    d.onclick = () => { if (!solving.has(m.name)) armModule(m); };
+    /*
+     * The other half of a module's difficulty, and the only half a person can
+     * answer. Offered on any module with a rung to test AT -- an unsolved one has
+     * no rung to make a claim about, so it is solved first.
+     */
+    if (io.moduleArena && io.play && r.rung !== null) {
+      const hp = document.createElement('button');
+      hp.className = 'ex';
+      hp.textContent = r.played ? 'hand-test again' : 'hand-test';
+      hp.title = r.played
+        ? 'Played at rung ' + r.rung + '. Play it again to re-record the verdict -- worth doing ' +
+          'when the simulator has been corrected since.'
+        : 'Play this module\'s arena at rung ' + r.rung + ' with exactly that rung\'s upgrades, ' +
+          'and record whether a person can really clear it. Solved is not the same as trusted.';
+      hp.onclick = (e) => { e.stopPropagation(); handTest(m); };
+      d.appendChild(hp);
+    }
     if (io.exportModule) {
       const ex = document.createElement('button');
       ex.className = 'ex'; ex.textContent = 'export';
@@ -2587,6 +2919,8 @@ function openModuleDialog() {
     name: '', tags: '',
     entry: { ...ends.entry }, exit: { ...ends.exit },
     ids: list.map((o) => o.id),
+    solve: true,   // solving on save is the default; the checkbox is how to say no
+    tagsTouched: false,
   };
   renderModuleDialog();
 }
@@ -2619,8 +2953,8 @@ function renderModuleDialog() {
     r.appendChild(l); r.appendChild(i);
     el.appendChild(r);
   };
-  row('name', modDialog.name, (v) => { modDialog.name = v; renderModuleWarning(); });
-  row('tags', modDialog.tags, (v) => { modDialog.tags = v; });
+  row('name', modDialog.name, (v) => { modDialog.name = v; adoptTags(); renderModuleWarning(); });
+  row('tags', modDialog.tags, (v) => { modDialog.tags = v; modDialog.tagsTouched = true; });
 
   const pt = (label, which) => {
     const r = document.createElement('div'); r.className = 'pair';
@@ -2647,6 +2981,31 @@ function renderModuleDialog() {
     'ledge flush with each. Drag the green and red markers on the canvas, or type them here. ' +
     'The exit must be right of the entry: arenas run left to right.';
   el.appendChild(note);
+
+  /*
+   * Solve on save.
+   *
+   * A module with no solve record is a module the generator cannot use, and the
+   * gap between saving one and remembering to run the solver is where an unsolved
+   * library comes from -- so it runs by default, and the box is how to say no. It
+   * appears only where solving is possible at all (the dev server; the userscript
+   * has no node) and only where a solve is actually NEEDED: an unchanged module
+   * keeps its record, and re-solving it would burn tens of seconds to write down
+   * the same number.
+   */
+  if (io.solveModule) {
+    const wrap = document.createElement('label');
+    wrap.className = 'chk';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.id = 'mde-modsolve';
+    cb.checked = modDialog.solve !== false;
+    cb.onchange = () => { modDialog.solve = cb.checked; };
+    const txt = document.createElement('span');
+    txt.id = 'mde-modsolvetxt';
+    wrap.appendChild(cb); wrap.appendChild(txt);
+    el.appendChild(wrap);
+  }
 
   const warn = document.createElement('div');
   warn.id = 'mde-modwarn';
@@ -2675,9 +3034,10 @@ function renderModuleWarning() {
   el.innerHTML = '';
   const name = moduleName(modDialog.name);
   const prev = name && moduleLib.find((m) => m.name === name);
-  if (!prev) return;
   const next = pendingModuleRecord();
-  const same = next && geomKey(prev) === geomKey(next);
+  const same = !!prev && !!next && geomKey(prev) === geomKey(next);
+  updateSolveChoice(prev, same);
+  if (!prev) return;
   const had = [prev.solve && 'its solve record', prev.handPlay && 'its hand-play verdict']
     .filter(Boolean).join(' and ');
   const d = document.createElement('div');
@@ -2689,6 +3049,23 @@ function renderModuleWarning() {
   el.appendChild(d);
 }
 
+/*
+ * Typing the name of a module that already exists adopts its tags.
+ *
+ * The dialog opens empty, so overwriting a module used to blank its tags -- work
+ * a person did, silently thrown away by a field they never touched. Only while
+ * the field is untouched, so clearing tags on purpose still clears them.
+ */
+function adoptTags() {
+  if (!modDialog || modDialog.tagsTouched) return;
+  const prev = moduleLib.find((m) => m.name === moduleName(modDialog.name));
+  const tags = prev && prev.tags ? prev.tags.join(', ') : '';
+  if (tags === modDialog.tags) return;
+  modDialog.tags = tags;
+  const field = root && root.querySelectorAll('#mde-modpanel input')[1];
+  if (field) field.value = tags;
+}
+
 const moduleName = (s) => String(s || '').trim().toLowerCase()
   .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 64);
 
@@ -2698,6 +3075,56 @@ function pendingModuleRecord() {
   if (!list.length) return null;
   const tags = modDialog.tags.split(',').map((t) => t.trim()).filter(Boolean);
   return buildModuleRecord(moduleName(modDialog.name), tags, list, modDialog.entry, modDialog.exit);
+}
+
+/*
+ * Whether saving this module will leave it without an answer, and therefore
+ * whether the solver has anything to do. `keeps` means the stored record survives
+ * the save, so a re-solve would spend tens of seconds writing down the number that
+ * is already there.
+ */
+function solveNeeded(prev, sameGeometry) {
+  return !(prev && sameGeometry && prev.solve);
+}
+
+function updateSolveChoice(prev, sameGeometry) {
+  const cb = root && root.querySelector('#mde-modsolve');
+  const txt = root && root.querySelector('#mde-modsolvetxt');
+  if (!cb || !txt) return;
+  const needed = solveNeeded(prev, sameGeometry);
+  cb.disabled = !needed;
+  if (!needed) cb.checked = false;
+  else if (modDialog.solve !== false) cb.checked = true;
+  txt.textContent = needed
+    ? 'Solve it now. Runs solver/solve-module.js over the saved module and writes the rung ' +
+      'into it -- seconds to a minute. Unticked, it saves as unsolved and the generator cannot ' +
+      'use it until you solve it by hand.'
+    : 'Already solved at rung ' + prev.solve.minRung + ', and this save does not change the ' +
+      'geometry, so there is nothing to re-solve.';
+}
+
+/*
+ * Solving runs AFTER the save and does not hold the dialog open.
+ *
+ * It is seconds to a minute per module, and a modal that sits there for a minute
+ * gets cancelled. The row carries the state instead: the badge goes amber and says
+ * "solving", and the library refreshes when the answer lands -- so a wrong rung is
+ * never on screen while the right one is being computed.
+ */
+async function runSolver(name) {
+  solving.add(name);
+  buildModuleList();
+  let res = null;
+  try { res = await io.solveModule(name); }
+  catch (e) { res = { ok: false, error: e.message }; }
+  solving.delete(name);
+  await refreshModuleList();
+  if (!res || !res.ok) {
+    alert('The solver did not produce an answer for "' + name + '", so it is saved as ' +
+          'unsolved.\n\n' + ((res && (res.error || res.output)) || 'no output') +
+          '\n\nRun it by hand to see the whole story:\n' +
+          '  cd solver && node solve-module.js ../mapeditor/modules/' + name + '.json --write');
+  }
 }
 
 async function saveModuleNow() {
@@ -2717,8 +3144,12 @@ async function saveModuleNow() {
     ok = !!(r && r.ok);
   } catch (e) { console.error('[editor] module save failed', e); }
   if (!ok) { alert('Could not save the module.'); return; }
+  const wantSolve = modDialog.solve !== false;
   closeModuleDialog();
   await refreshModuleList();
+  // full.solve survives only when the geometry did not move, and that is exactly
+  // when there is nothing to run
+  if (io.solveModule && wantSolve && !full.solve) runSolver(name);
 }
 
 /*
@@ -3808,7 +4239,12 @@ function onKeyDown(e) {
     if (k === 'v') { paste(); e.preventDefault(); return; }
   }
   if (/^Arrow/.test(e.key) && !e.repeat && s.length) pushHistory();
-  if (e.key === 'Escape') { if (modDialog) closeModuleDialog(); else setTool('select'); }
+  if (e.key === 'Escape') {
+    const rungs = $('rungs');
+    if (rungs && rungs.style.display === 'block') rungs.style.display = 'none';
+    else if (modDialog) closeModuleDialog();
+    else setTool('select');
+  }
   else if (e.key === 'Delete' || e.key === 'Backspace') {
     pushHistory();
     map.objects = map.objects.filter((o) => !sel.includes(o.id)); sel = []; refresh(); e.preventDefault();
@@ -4384,6 +4820,13 @@ async function boot() {
     modSave.onclick = openModuleDialog;
     await refreshModuleList();
   }
+  /*
+   * The rung reference does not need a library -- it is the ladder, which is
+   * bundled -- so it survives an io with no module storage at all.
+   */
+  const rungBtn = $('rungref');
+  if (typeof Ladder !== 'undefined') rungBtn.onclick = toggleRungRef;
+  else rungBtn.style.display = 'none';
 
   // Play always saves first. The runner reads the map back out, so running a
   // stale copy of what is on screen would be worse than a moment of delay.
@@ -4537,6 +4980,13 @@ return {
    */
   _module: { canonical, geomKey, moduleRung, deriveEnds, stripModuleObject,
              buildModuleRecord, mergeModule, MODULE_OPTIONAL },
+  /*
+   * The ability model, exported so test-geometry.js can hold it against the real
+   * solver/physics.js. These are transcribed, not imported -- physics.js is node
+   * only -- and a silent drift here would put wrong numbers in front of an author
+   * with no way to notice.
+   */
+  _rungs: { moveAccel, jumpImpulse, jumpRise },
   // read-only view of the live state, for driving the editor from a test page:
   // handle positions are in world space and the tests need the same transform
   // the canvas uses, which no amount of reading the panels recovers exactly
@@ -4831,6 +5281,46 @@ return {
     return out;
   }
 
+  /*
+   * The nine sliders a LADDER RUNG means.
+   *
+   * Six of them come straight off the rung. The other three are not on the ladder
+   * at all, and what they are pinned to is a correctness question rather than a
+   * convenience one, because this is the setting a hand-play verdict is recorded
+   * against:
+   *
+   *   tim (Time Limit) -> max. The timer is not an ability, it is the map-level
+   *     budget Phase 4 spends across a whole run. A module hand-test that the
+   *     clock ended would be a test of the clock.
+   *   gunpow (Gun Power) -> 0. It scales the bullet's horizontal collision box,
+   *     and the solver models the base one (a fixed 24px box, stepped 20px at a
+   *     time). Giving it more would make a must-shoot route EASIER than the run
+   *     that was solved, and a verdict is only worth recording if the person had
+   *     no more than the simulator gave itself.
+   *   multi (Coin Multiplier) -> 0. Coins only; it cannot touch the physics.
+   *
+   * `rung` is a row of solver/ladder.js RUNGS.
+   */
+  function valuesForRung(rung) {
+    return {
+      spd: rung.speed,
+      jmp: rung.jump,
+      jmp2: rung.doubleJump ? 1 : 0,
+      nrg: rung.energy,
+      wpn: rung.gun ? 1 : 0,
+      ammo: rung.ammo,
+      tim: 24,
+      gunpow: 0,
+      multi: 0,
+    };
+  }
+
+  /** Do these slider values still say what the rung says? */
+  function matchesRung(values, rung) {
+    const want = valuesForRung(rung);
+    return Object.keys(want).every((k) => (values[k] || 0) === want[k]);
+  }
+
   function saveValues(values, extra) {
     const p = readPrefs();
     p.upgrades = Object.assign({}, values);
@@ -4990,7 +5480,8 @@ return {
     };
   }
 
-  return { UPGRADES, PREFS, readPrefs, writePrefs, startingValues, saveValues, apply, buildSliders, panel };
+  return { UPGRADES, PREFS, readPrefs, writePrefs, startingValues, saveValues, apply,
+           valuesForRung, matchesRung, buildSliders, panel };
 }));
 
 

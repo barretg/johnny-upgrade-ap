@@ -73,6 +73,7 @@
   "hash": "23dacad30702",
   "playedAt": "2026-08-27",
   "minRung": 20,
-  "why": "Played at rung 20 (spd7/jmp6). Confirmed as a real speed/jump frontier rather than a single-axis gap: off the ladder it also clears at jmp8/spd6 and at jmp9/spd5, which is the trade the ladder collapses to one number. The rung is right; the module is only ever an upper bound on what a player with a different mix of Speed and Jump needs."
+  "why": "Played the arena at rung 20 (20 spd7/jmp6/dj1/e3/ammo3) and cleared it on attempt 1.",
+  "attempts": 1
  }
 }

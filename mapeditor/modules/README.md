@@ -78,6 +78,24 @@ The seven modules here were written by hand. Everything since has a tool:
 - Provenance goes in `map.meta.modules` (`{ name, x, y, minRung }`) and never into
   a map's objects. `iniLevel()` ignores `meta`; `mapformat` forwards it whole.
 
+- **The save dialog runs the solver for you**, ticked by default, and writes the
+  answer straight into the file -- the same `solve-module.js --write` you would run
+  by hand. It is offered only where a solve is actually needed (a new module, or
+  one whose geometry moved) and only on the dev server, since solving is node. The
+  row shows `solving...` while it runs and refreshes to the real rung when it
+  lands. Untick it to save a module as unsolved on purpose.
+- **The hand-test button** plays the module's arena at its rung with exactly that
+  rung's upgrades and records the verdict from the play page. Failing an attempt
+  and giving up on a rung are separate buttons: only the second moves up the
+  ladder, because a rung raised on the first death grades the module harder than
+  it is and a verdict can never be lowered afterwards. `handPlay.attempts` and
+  `handPlay.triedBelow` record how many tries it took and which rungs were given
+  up on -- cleared-first-go and cleared-on-the-twentieth are the same rung and not
+  the same module.
+- **The rung reference** button shows this ladder as a table -- every rung, the item
+  it adds, its tiers, and what those turn into: terminal run speed, and how high a
+  jump reaches. It reads `solver/ladder.js` itself, not a copy.
+
 Two things the editor guarantees, because they are what keeps a rung honest:
 
 - **A re-save that changed nothing is byte-identical to the file on disk**,

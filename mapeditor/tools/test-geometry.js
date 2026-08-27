@@ -105,3 +105,60 @@ eq(mod.stripModuleObject({ id:3, kind:'plat', x:0, y:0, w:10, h:10, semi:0, stom
    { kind:'plat', x:0, y:0, w:10, h:10 }, 'strip: default plat flags and the editing-only z');
 eq(mod.stripModuleObject({ id:4, kind:'ene', x:0, y:0, w:0, h:0, typ:'robot', xx:0, yy:0 }),
    { kind:'ene', x:0, y:0, w:0, h:0, typ:'robot', xx:0, yy:0 }, 'strip: an enemy keeps a speed of zero');
+
+// ---------------------------------------------------------------- the rung reference
+/*
+ * The editor's copy of the ability model, held against the real one.
+ *
+ * moveAccel and jumpImpulse are transcribed into editor-core because physics.js
+ * is node-only -- it derives its world from JU_MAP at require() time -- and the
+ * editor runs in a browser. A transcription that drifts puts wrong numbers in
+ * front of an author with nothing on screen to say so, which is why this is a
+ * test and not a comment.
+ */
+const PH = require('../../solver/physics.js');
+const R = E._rungs;
+const L = require('../../solver/ladder.js');
+
+let accelOk = true, impulseOk = true;
+for (let t = 0; t <= 10; t++) {
+  if (R.moveAccel(t) !== PH.moveAccel(t)) accelOk = false;
+  // physics.js returns the impulse as a negative vy; the editor shows it as a height
+  const want = PH.jumpImpulse(t);
+  const got = R.jumpImpulse(t);
+  if (want === null ? got !== null : got !== -want) impulseOk = false;
+}
+eq(accelOk, true, 'the editor\'s moveAccel matches solver/physics.js for every tier');
+eq(impulseOk, true, 'and so does its jumpImpulse');
+
+/*
+ * The closed form for jump height, against a loop that just runs the frames the
+ * way physics.js orders them: controls sets vy, then `vy += GRAVITY; y += vy`.
+ * The closed form is what the module set's hand predictions were made with.
+ */
+function riseByLoop(jmp) {
+  const J = PH.jumpImpulse(jmp);
+  if (J === null) return 0;
+  let vy = J, rise = 0;
+  for (;;) {
+    vy += 1;                 // GRAVITY
+    if (vy >= 0) break;
+    rise += -vy;
+  }
+  return rise;
+}
+let riseOk = true;
+for (let t = 1; t <= 10; t++) {
+  if (Math.abs(R.jumpRise(t) - riseByLoop(t)) > 1e-9) riseOk = false;
+}
+eq(riseOk, true, 'jumpRise matches a frame-by-frame run of the same physics');
+
+/*
+ * And against a real solved boundary. ledge-tall is a 270px step: it solves at
+ * rung 14 and not at rung 13, so a double jump at rung 14 must clear 270 and one
+ * at rung 13 must not. If this fails the reference is lying about the one thing
+ * an author reads it for.
+ */
+const r13 = L.RUNGS[13], r14 = L.RUNGS[14];
+eq([2 * R.jumpRise(r13.jump) >= 270, 2 * R.jumpRise(r14.jump) >= 270], [false, true],
+   'the rung 13/14 boundary at ledge-tall\'s 270px step comes out where the solver put it');

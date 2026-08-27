@@ -71,6 +71,46 @@
     return out;
   }
 
+  /*
+   * The nine sliders a LADDER RUNG means.
+   *
+   * Six of them come straight off the rung. The other three are not on the ladder
+   * at all, and what they are pinned to is a correctness question rather than a
+   * convenience one, because this is the setting a hand-play verdict is recorded
+   * against:
+   *
+   *   tim (Time Limit) -> max. The timer is not an ability, it is the map-level
+   *     budget Phase 4 spends across a whole run. A module hand-test that the
+   *     clock ended would be a test of the clock.
+   *   gunpow (Gun Power) -> 0. It scales the bullet's horizontal collision box,
+   *     and the solver models the base one (a fixed 24px box, stepped 20px at a
+   *     time). Giving it more would make a must-shoot route EASIER than the run
+   *     that was solved, and a verdict is only worth recording if the person had
+   *     no more than the simulator gave itself.
+   *   multi (Coin Multiplier) -> 0. Coins only; it cannot touch the physics.
+   *
+   * `rung` is a row of solver/ladder.js RUNGS.
+   */
+  function valuesForRung(rung) {
+    return {
+      spd: rung.speed,
+      jmp: rung.jump,
+      jmp2: rung.doubleJump ? 1 : 0,
+      nrg: rung.energy,
+      wpn: rung.gun ? 1 : 0,
+      ammo: rung.ammo,
+      tim: 24,
+      gunpow: 0,
+      multi: 0,
+    };
+  }
+
+  /** Do these slider values still say what the rung says? */
+  function matchesRung(values, rung) {
+    const want = valuesForRung(rung);
+    return Object.keys(want).every((k) => (values[k] || 0) === want[k]);
+  }
+
   function saveValues(values, extra) {
     const p = readPrefs();
     p.upgrades = Object.assign({}, values);
@@ -230,5 +270,6 @@
     };
   }
 
-  return { UPGRADES, PREFS, readPrefs, writePrefs, startingValues, saveValues, apply, buildSliders, panel };
+  return { UPGRADES, PREFS, readPrefs, writePrefs, startingValues, saveValues, apply,
+           valuesForRung, matchesRung, buildSliders, panel };
 }));
