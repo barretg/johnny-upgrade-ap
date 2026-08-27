@@ -28,9 +28,13 @@ const MAX_ENERGY = 5; // hearts; iniLdat starts the player at nrg.v = 0.1, i.e. 
 
 // JU_ATLAS_DIR lets a second arm (e.g. one with the frame-perfect techs enabled) be swept into
 // its own directory instead of colliding with the default one.
+//
+// Failing that, a custom map (JU_MAP) gets its own out/map-<id>/ rather than landing in the
+// vanilla atlas. Vanilla runs with neither variable set keep writing to out/ exactly as before.
+const MAP_ID = require('./mapsource').id();
 const OUT = process.env.JU_ATLAS_DIR
   ? path.resolve(process.env.JU_ATLAS_DIR)
-  : path.join(__dirname, 'out');
+  : path.join(__dirname, 'out', ...(MAP_ID ? ['map-' + MAP_ID] : []));
 const COMBO_DIR = path.join(OUT, 'combo');
 
 function ensureDirs() {

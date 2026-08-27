@@ -15,7 +15,14 @@
 // different settings, which is exactly the protection you want here.
 const bool = (k, d) => (process.env[k] !== undefined ? !/^(0|false|no)$/i.test(process.env[k]) : d);
 
+// Which map these results describe. Only present when JU_MAP names a custom map, so a vanilla
+// atlas built before this existed still matches its own settings.json and needs no rebuild --
+// and any custom-map atlas can never be mixed with the vanilla one, since the key differs.
+const mapId = require('./mapsource').id();
+
 module.exports = {
+  ...(mapId ? { mapId } : {}),
+
   // --- human-execution knobs -------------------------------------------------------------
   // These decide what counts as a route a person could actually pull off, as opposed to one that
   // is merely physically possible. They change results, so they are part of the atlas identity.

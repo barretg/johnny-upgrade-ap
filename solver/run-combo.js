@@ -47,8 +47,11 @@ function runOne(combo) {
 
   const frames = new Array(L.N_LOC).fill(-1);
   for (let i = 0; i < F.N_COIN; i++) frames[i] = r.coinFrame[i];
-  frames[L.GUN_INDEX] = r.gunFrame;
-  frames[L.GATE_INDEX] = r.gateFrame;
+  // fastsim reports one gun pickup and one boss gate; the index lists are plural so that the
+  // multi-gun / multi-arena maps do not renumber locations later. Extras stay -1 (unreachable),
+  // which is the safe direction.
+  if (L.GUN_INDICES.length) frames[L.GUN_INDICES[0]] = r.gunFrame;
+  if (L.GATE_INDICES.length) frames[L.GATE_INDICES[0]] = r.gateFrame;
   L.ROBOT_ENE_INDICES.forEach((eneIdx, n) => {
     frames[L.ROBOT_INDEX0 + n] = r.shotFrame[eneIdx];
   });

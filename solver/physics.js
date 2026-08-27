@@ -9,8 +9,8 @@
 // Tier -> game value: shop.js's addITM indexes its price array with Math.round(v * 10) and
 // shopBtnPress adds a flat u = 0.1 per purchase, so tier T means v = T * 0.1 for every track.
 
-const maps = require('./data/maps.js');
-const M = maps[1];
+// The map under test: vanilla unless JU_MAP names another one (see mapsource.js).
+const M = require('./mapsource').load();
 
 const GRAVITY = 1;
 const MAX_FALL = 90;
@@ -65,10 +65,27 @@ function buildStaticPlats() {
 }
 
 const STATIC_PLATS = buildStaticPlats();
-const STOMPER_PROTO = STATIC_PLATS.find((p) => p.stomper);
-// stomperCode's trigger band: game.stomper.xmin = ob.x + 200, xmax = ob.x + 280.
-const STOMPER_TRIG_XMIN = STOMPER_PROTO.l + 200;
-const STOMPER_TRIG_XMAX = STOMPER_PROTO.l + 280;
+// A map need not have a crusher; when it does not, initState() starts the stomper 'gone' and
+// every stomperCode branch is skipped.
+const STOMPER_PROTO = STATIC_PLATS.find((p) => p.stomper) || null;
+const STOMPER_SPEC = STOMPER_PROTO ? M.plats[STOMPER_PROTO.i] : null;
+
+// mapkit/crushers.js drives each crusher from its own map data, falling back to the vanilla
+// constant per field. The solver has to model whatever the runtime will actually do, so it
+// reads the same fields with the same defaults -- a vanilla map, which states none of them,
+// still gets exactly the stock trigger band (x + 200, 80 wide, y <= 360), 0.25 accel and a
+// resting y of -60.
+const cnum = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
+const STOMPER_TRIG_XMIN = STOMPER_PROTO ? cnum(STOMPER_SPEC.trigX, STOMPER_PROTO.l + 200) : 0;
+const STOMPER_TRIG_XMAX = STOMPER_PROTO
+  ? STOMPER_TRIG_XMIN + cnum(STOMPER_SPEC.trigW, 80)
+  : 0;
+const STOMPER_TRIG_Y = STOMPER_PROTO ? cnum(STOMPER_SPEC.trigY, 360) : 0;
+const STOMPER_ACCEL = STOMPER_PROTO ? cnum(STOMPER_SPEC.accel, 0.25) : 0.25;
+const STOMPER_FALL_TO = STOMPER_PROTO ? cnum(STOMPER_SPEC.fallTo, -60) : -60;
+
+// Neither simulator models more than one crusher, nor a repeating one -- fastsim.js refuses
+// such a map outright, and every consumer loads fastsim.js.
 
 // Lasers. iniLevel gives the FIRST laser in the array a 90-degree rotation and a wide/short
 // hitbox; the rest keep the default narrow/tall one.
@@ -306,9 +323,9 @@ function initialState(cfg) {
     hearts: cfg.energyTier,
     inv: 0,
     scaleX: 1,
-    stomperY: STOMPER_PROTO.t,
+    stomperY: STOMPER_PROTO ? STOMPER_PROTO.t : 0,
     stomperFall: false,
-    stomperGone: false,
+    stomperGone: !STOMPER_PROTO,
     dead: false,
     frame: 0,
   };
@@ -365,12 +382,17 @@ function step(prev, input, cfg) {
 
   // --- stomperCode --- (runs before platMoveCode in update())
   if (!s.stomperGone) {
-    if (!s.stomperFall && s.y <= 360 && s.x > STOMPER_TRIG_XMIN && s.x < STOMPER_TRIG_XMAX) {
+    if (
+      !s.stomperFall &&
+      s.y <= STOMPER_TRIG_Y &&
+      s.x > STOMPER_TRIG_XMIN &&
+      s.x < STOMPER_TRIG_XMAX
+    ) {
       s.stomperFall = true;
       s.stomperVY = 0;
     }
     if (s.stomperFall) {
-      s.stomperVY += 0.25;
+      s.stomperVY += STOMPER_ACCEL;
       s.stomperY += Math.round(s.stomperVY);
       const box = {
         l: STOMPER_PROTO.l,
@@ -379,12 +401,13 @@ function step(prev, input, cfg) {
         b: s.stomperY + STOMPER_PROTO.h,
       };
       if (sprtHit(s, box)) {
-        // killSprite(stomper, 10) -- ten hearts at once, i.e. lethal at every energy tier.
+        // killSprite(stomper, damage). Vanilla's 10 is lethal at every energy tier; a map that
+        // lowers `damage` is still treated as lethal here, which is the strict direction.
         s.dead = true;
         return s;
       }
-      if (s.stomperY >= -60) {
-        s.stomperY = -60;
+      if (s.stomperY >= STOMPER_FALL_TO) {
+        s.stomperY = STOMPER_FALL_TO;
         s.stomperGone = true;
       }
     }

@@ -14,8 +14,8 @@
 // at frame f. Minimum frames to a location therefore falls straight out of the layer index, and
 // "time lost dodging a saw" or "time spent riding a lift" is paid for as real elapsed frames.
 
-const maps = require('./data/maps.js');
-const M = maps[1];
+// The map under test: vanilla unless JU_MAP names another one (see mapsource.js).
+const M = require('./mapsource').load();
 
 const KOL_W = 30;
 const KOL_H = 90;
@@ -63,9 +63,36 @@ M.plats.forEach((ob, i) => {
 });
 for (let i = 0; i < N_PM; i++) PL[(N_STATIC + i) * 5 + 4] = 1; // platMoves are semi
 
-const STOMPER_TRIG_XMIN = STOMPER_L + 200;
-const STOMPER_TRIG_XMAX = STOMPER_L + 280;
-const STOMPER_Y0 = M.plats[STOMPER_IDX].y;
+// mapkit/crushers.js drives each crusher from its own map data, defaulting per field to the
+// vanilla constant. physics.js reads the same fields with the same defaults -- see the longer
+// note there, including why a map with several crushers, or a repeating one, is refused.
+const STOMPER_SPEC = STOMPER_IDX >= 0 ? M.plats[STOMPER_IDX] : {};
+const cnum = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
+const STOMPER_TRIG_XMIN = cnum(STOMPER_SPEC.trigX, STOMPER_L + 200);
+const STOMPER_TRIG_XMAX = STOMPER_TRIG_XMIN + cnum(STOMPER_SPEC.trigW, 80);
+const STOMPER_TRIG_Y = cnum(STOMPER_SPEC.trigY, 360);
+const STOMPER_ACCEL = cnum(STOMPER_SPEC.accel, 0.25);
+const STOMPER_FALL_TO = cnum(STOMPER_SPEC.fallTo, -60);
+
+// Neither simulator models more than one crusher, nor a repeating one: both would need extra
+// per-state variables. Refuse such a map rather than silently simulating a hazard that is not
+// there -- under-modelling a lethal obstacle LOOSENS logic, which is the direction that
+// generates unbeatable seeds.
+{
+  const stompers = M.plats.filter((pl) => pl.stomper);
+  if (stompers.length > 1) {
+    throw new Error(
+      'This map has ' + stompers.length + ' crushers; the solver models at most one. ' +
+        'Multi-crusher support needs per-crusher state in fastsim.js.'
+    );
+  }
+  if (stompers.some((pl) => pl.repeat)) {
+    throw new Error('This map has a repeating crusher; the solver models one-shot crushers only.');
+  }
+}
+// A map need not have a crusher at all; when it does not, the stomper state starts 'spent'
+// (S_SF = 2) and every branch below is skipped.
+const STOMPER_Y0 = STOMPER_IDX >= 0 ? M.plats[STOMPER_IDX].y : 0;
 
 // Static spike rectangles (ldat.spikes). Lasers/enemies/bombs join `spikes` at runtime but move,
 // so they live in the per-frame hazard table instead.
@@ -399,7 +426,7 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
   if (s[S_SF] !== 2) {
     if (
       s[S_SF] === 0 &&
-      s[S_Y] <= 360 &&
+      s[S_Y] <= STOMPER_TRIG_Y &&
       s[S_X] > STOMPER_TRIG_XMIN &&
       s[S_X] < STOMPER_TRIG_XMAX
     ) {
@@ -407,15 +434,15 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
       s[S_SVY] = 0;
     }
     if (s[S_SF] === 1) {
-      s[S_SVY] += 0.25;
+      s[S_SVY] += STOMPER_ACCEL;
       s[S_SY] += Math.round(s[S_SVY]);
       const t = s[S_SY];
       const b = t + STOMPER_H;
       if (s[S_X] - KOL_W < STOMPER_R && s[S_X] + KOL_W > STOMPER_L && s[S_Y] - KOL_H < b && s[S_Y] > t) {
         return 1; // killSprite(stomper, 10): lethal at every energy tier
       }
-      if (s[S_SY] >= -60) {
-        s[S_SY] = -60;
+      if (s[S_SY] >= STOMPER_FALL_TO) {
+        s[S_SY] = STOMPER_FALL_TO;
         s[S_SF] = 2;
       }
     }
@@ -441,7 +468,7 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
     PL[base + 3] = py + 60;
   }
   // And the stomper's current vertical extent.
-  {
+  if (STOMPER_IDX >= 0) {
     const base = STOMPER_IDX * 5;
     PL[base + 1] = s[S_SY];
     PL[base + 3] = s[S_SY] + STOMPER_H;
@@ -828,7 +855,7 @@ function search(opts = {}) {
   scratch[S_JU] = 0;
   scratch[S_SY] = STOMPER_Y0;
   scratch[S_SVY] = 0;
-  scratch[S_SF] = 0;
+  scratch[S_SF] = STOMPER_IDX >= 0 ? 0 : 2;
   scratch[S_PU] = -1;
   scratch[S_SC] = 1;
   scratch[S_HP] = o.energyTier;
