@@ -1,0 +1,99 @@
+{
+ "name": "robot-pair",
+ "version": 1,
+ "tags": [
+  "robot",
+  "gun",
+  "ammo"
+ ],
+ "objects": [
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 0,
+   "w": 2400,
+   "h": 200
+  },
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 300,
+   "w": 2400,
+   "h": 200
+  },
+  {
+   "kind": "ene",
+   "x": 800,
+   "y": 301,
+   "w": 0,
+   "h": 0,
+   "typ": "robot",
+   "xx": 0,
+   "yy": 0,
+   "xmin": 800,
+   "xmax": 800,
+   "ymin": 301,
+   "ymax": 301
+  },
+  {
+   "kind": "ene",
+   "x": 1500,
+   "y": 301,
+   "w": 0,
+   "h": 0,
+   "typ": "robot",
+   "xx": 0,
+   "yy": 0,
+   "xmin": 1500,
+   "xmax": 1500,
+   "ymin": 301,
+   "ymax": 301
+  }
+ ],
+ "entry": {
+  "x": 0,
+  "y": 300
+ },
+ "exit": {
+  "x": 2400,
+  "y": 300
+ },
+ "expect": {
+  "minRung": 12,
+  "tolerance": 0,
+  "why": "A robot is a hazard, not a wall, so ONE robot never gates on the gun -- you tank it and walk through. Two of them, 700px apart, do: 700px is more than 60 frames of invulnerability even at spd10 (672px), so both always land a hit. Two hits need 3 hearts (Energy is at rung 15), while the gun with Ammo 1 gives exactly two bullets and one bullet kills a robot, so rung 12 is the cheaper route. The corridor has 100px of headroom and a robot is 120px tall, so neither can be jumped."
+ },
+ "size": {
+  "w": 2400,
+  "h": 500
+ },
+ "solve": {
+  "hash": "cb4df15eeca7",
+  "settings": {
+   "recoilBoost": false,
+   "knockbackBoost": false,
+   "stride": 4,
+   "qPos": 6,
+   "qVx": 1,
+   "qVy": 1,
+   "phaseMod": 100,
+   "phaseBucket": 10,
+   "hazardPad": 120,
+   "beamCell": 16,
+   "beamCap": 64,
+   "maxFrames": 9000,
+   "hashBits": 25
+  },
+  "minRung": 12,
+  "combo": {
+   "spdTier": 4,
+   "jmpTier": 4,
+   "doubleJump": true,
+   "energyTier": 2,
+   "ammoTier": 1
+  },
+  "frames": 432,
+  "arena": "mapeditor/maps/module-robot-pair.json",
+  "solvedAt": "2026-08-27"
+ }
+}

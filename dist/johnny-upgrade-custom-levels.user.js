@@ -734,16 +734,19 @@
       for (const c of crushers) {
         const s = c.sprite;
 
-        if (!c.falling) {
-          if (c.wait > 0) {
-            if (--c.wait === 0) { s.y = c.startY; c.vy = 0; win.getNewBounds(s); }
-            continue;
-          }
-          if (sprt.y <= c.trigY && sprt.x > c.trigX && sprt.x < c.trigX + c.trigW) {
-            c.falling = true;
-          }
+        if (c.wait > 0) {
+          if (--c.wait === 0) { s.y = c.startY; c.vy = 0; win.getNewBounds(s); }
           continue;
         }
+
+        // The stock routine arms and takes its first fall step in the SAME frame (that step
+        // moves 0px, since Math.round(0.25) is 0, but everything after it is one frame earlier
+        // than it would be otherwise). Falling through rather than `continue`ing here is what
+        // keeps this identical to vanilla -- and identical to what solver/fastsim.js models.
+        if (!c.falling && sprt.y <= c.trigY && sprt.x > c.trigX && sprt.x < c.trigX + c.trigW) {
+          c.falling = true;
+        }
+        if (!c.falling) continue;
 
         c.vy += c.accel;
         s.y += Math.round(c.vy);

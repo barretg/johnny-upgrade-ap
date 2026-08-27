@@ -1,0 +1,70 @@
+{
+ "name": "ledge-tall",
+ "version": 1,
+ "tags": [
+  "ledge",
+  "jump"
+ ],
+ "objects": [
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 270,
+   "w": 600,
+   "h": 400
+  },
+  {
+   "kind": "plat",
+   "x": 700,
+   "y": 0,
+   "w": 600,
+   "h": 670
+  }
+ ],
+ "entry": {
+  "x": 0,
+  "y": 270
+ },
+ "exit": {
+  "x": 1300,
+  "y": 0
+ },
+ "expect": {
+  "minRung": 14,
+  "tolerance": 1,
+  "why": "A 270px step up, with the upper ledge set back 100px so there is no wall to clamp against on the way up. Jump rise is n*J - n*(n+1)/2 for J = 12 + 1.1*jmp, n = floor(J), doubled by Double Jump: 253px at rung 10 (jmp4+DJ) fails, 289px at rung 14 (jmp5+DJ) clears. Tolerance 1: 19px of clearance is only about six frames near the apex to cover the 40px of horizontal set-back."
+ },
+ "size": {
+  "w": 1300,
+  "h": 670
+ },
+ "solve": {
+  "hash": "32f362cfd5eb",
+  "settings": {
+   "recoilBoost": false,
+   "knockbackBoost": false,
+   "stride": 4,
+   "qPos": 6,
+   "qVx": 1,
+   "qVy": 1,
+   "phaseMod": 100,
+   "phaseBucket": 10,
+   "hazardPad": 120,
+   "beamCell": 16,
+   "beamCap": 64,
+   "maxFrames": 9000,
+   "hashBits": 25
+  },
+  "minRung": 14,
+  "combo": {
+   "spdTier": 5,
+   "jmpTier": 5,
+   "doubleJump": true,
+   "energyTier": 2,
+   "ammoTier": 1
+  },
+  "frames": 232,
+  "arena": "mapeditor/maps/module-ledge-tall.json",
+  "solvedAt": "2026-08-27"
+ }
+}

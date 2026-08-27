@@ -1,0 +1,77 @@
+{
+ "name": "spike-corridor",
+ "version": 1,
+ "tags": [
+  "spike",
+  "energy"
+ ],
+ "objects": [
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 0,
+   "w": 1600,
+   "h": 200
+  },
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 300,
+   "w": 1600,
+   "h": 200
+  },
+  {
+   "kind": "spike",
+   "x": 700,
+   "y": 240,
+   "w": 150,
+   "h": 60
+  }
+ ],
+ "entry": {
+  "x": 0,
+  "y": 300
+ },
+ "exit": {
+  "x": 1600,
+  "y": 300
+ },
+ "expect": {
+  "minRung": 5,
+  "tolerance": 0,
+  "why": "One unavoidable spike strip in a corridor with 100px of headroom, so it cannot be jumped (a jump into the ceiling gains 10px, and clearing the 60px spikes needs 60). At 1 heart any contact is fatal, so rungs 1-4 fail. Rung 5 is the first Energy: 2 hearts survive the hit, and the 60 frames of invulnerability cover the 210px of contact at spd2 in 44 frames. Exactly one hit, so no more Energy is needed."
+ },
+ "size": {
+  "w": 1600,
+  "h": 500
+ },
+ "solve": {
+  "hash": "fbfd21d5db53",
+  "settings": {
+   "recoilBoost": false,
+   "knockbackBoost": false,
+   "stride": 4,
+   "qPos": 6,
+   "qVx": 1,
+   "qVy": 1,
+   "phaseMod": 100,
+   "phaseBucket": 10,
+   "hazardPad": 120,
+   "beamCell": 16,
+   "beamCap": 64,
+   "maxFrames": 9000,
+   "hashBits": 25
+  },
+  "minRung": 5,
+  "combo": {
+   "spdTier": 2,
+   "jmpTier": 2,
+   "doubleJump": false,
+   "energyTier": 2,
+   "ammoTier": 0
+  },
+  "frames": 412,
+  "arena": "mapeditor/maps/module-spike-corridor.json",
+  "solvedAt": "2026-08-27"
+ }
+}

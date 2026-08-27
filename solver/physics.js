@@ -65,32 +65,52 @@ function buildStaticPlats() {
 }
 
 const STATIC_PLATS = buildStaticPlats();
-// A map need not have a crusher; when it does not, initState() starts the stomper 'gone' and
-// every stomperCode branch is skipped.
-const STOMPER_PROTO = STATIC_PLATS.find((p) => p.stomper) || null;
-const STOMPER_SPEC = STOMPER_PROTO ? M.plats[STOMPER_PROTO.i] : null;
 
-// mapkit/crushers.js drives each crusher from its own map data, falling back to the vanilla
-// constant per field. The solver has to model whatever the runtime will actually do, so it
-// reads the same fields with the same defaults -- a vanilla map, which states none of them,
-// still gets exactly the stock trigger band (x + 200, 80 wide, y <= 360), 0.25 accel and a
-// resting y of -60.
+// Crushers. mapkit/crushers.js drives EVERY stomper platform from its own map data, falling back
+// to the vanilla constant per field. The solver has to model whatever the runtime will actually
+// do, so it reads the same fields with the same defaults -- a vanilla map, which states none of
+// them, still gets exactly the stock trigger band (x + 200, 80 wide, y <= 360), 0.25 accel and a
+// resting y of -60. fastsim.js builds the same table; the two must not drift.
+//
+// A map may have any number of crushers, or none. Each carries its own { y, vy, flag } in the
+// player state (initialState below); with none, every branch here is skipped.
 const cnum = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
-const STOMPER_TRIG_XMIN = STOMPER_PROTO ? cnum(STOMPER_SPEC.trigX, STOMPER_PROTO.l + 200) : 0;
-const STOMPER_TRIG_XMAX = STOMPER_PROTO
-  ? STOMPER_TRIG_XMIN + cnum(STOMPER_SPEC.trigW, 80)
-  : 0;
-const STOMPER_TRIG_Y = STOMPER_PROTO ? cnum(STOMPER_SPEC.trigY, 360) : 0;
-const STOMPER_ACCEL = STOMPER_PROTO ? cnum(STOMPER_SPEC.accel, 0.25) : 0.25;
-const STOMPER_FALL_TO = STOMPER_PROTO ? cnum(STOMPER_SPEC.fallTo, -60) : -60;
+const CRUSHERS = STATIC_PLATS.filter((p) => p.stomper).map((proto) => {
+  const spec = M.plats[proto.i];
+  const trigXmin = cnum(spec.trigX, proto.l + 200);
+  return {
+    proto,
+    y0: proto.t,
+    trigXmin,
+    trigXmax: trigXmin + cnum(spec.trigW, 80),
+    trigY: cnum(spec.trigY, 360),
+    accel: cnum(spec.accel, 0.25),
+    fallTo: cnum(spec.fallTo, -60),
+    // A repeating crusher rests at fallTo for `resetIn` frames, climbs back to its start and can
+    // fire again. A one-shot one stays where it landed for the rest of the run.
+    repeat: !!spec.repeat,
+    resetIn: cnum(spec.resetIn, 90),
+  };
+});
 
-// Neither simulator models more than one crusher, nor a repeating one -- fastsim.js refuses
-// such a map outright, and every consumer loads fastsim.js.
+// Laser hitboxes.
+//
+// iniLevel() force-rotates the FIRST laser in the array to a horizontal 590px beam and gives
+// every other one the stock 40x180 upright box -- a hand-tuned detail of the vanilla level.
+// mapkit/patcher.js's freeLasers unpins both per laser, so the solver has to read the same
+// fields with the same fallbacks or it models a beam of a different shape than the one that
+// will actually hurt the player. A laser that states nothing keeps the stock behaviour, so
+// vanilla is untouched. Half the beam sits either side of the sprite, which is anchored at
+// its centre.
+function laserOffset(spec, i) {
+  const horizontal = spec.horizontal === undefined ? i === 0 : !!spec.horizontal;
+  const half = Math.max(8, Number(spec.length) || (horizontal ? 590 : 180)) / 2;
+  return horizontal ? [-half, -20, half, 20] : [-20, -half, 20, half];
+}
 
-// Lasers. iniLevel gives the FIRST laser in the array a 90-degree rotation and a wide/short
-// hitbox; the rest keep the default narrow/tall one.
 const LASERS = M.lasers.map((ob, i) => {
-  const off = i === 0 ? { l: -295, t: -20, r: 295, b: 20 } : { l: -20, t: -90, r: 20, b: 90 };
+  const o = laserOffset(ob, i);
+  const off = { l: o[0], t: o[1], r: o[2], b: o[3] };
   return {
     l: ob.x + off.l,
     t: ob.y + off.t,
@@ -309,8 +329,8 @@ function primeWorld(maxFrame) {
 //   hearts remaining nrg entries
 //   inv    sprt.inv invulnerability countdown
 //   scaleX facing (+1/-1), which sets the knockback direction on a hit
-//   stomperY  null until triggered, then the falling crusher's y
-//   stomperFall / stomperGone
+//   crushers  one { y, vy, flag } per stomper platform, in CRUSHERS order; flag is
+//             0 armed, 1 falling, 2 at rest, 3 waiting to climb back (repeating crushers)
 //   dead   run-ending flag
 
 function initialState(cfg) {
@@ -323,9 +343,7 @@ function initialState(cfg) {
     hearts: cfg.energyTier,
     inv: 0,
     scaleX: 1,
-    stomperY: STOMPER_PROTO ? STOMPER_PROTO.t : 0,
-    stomperFall: false,
-    stomperGone: !STOMPER_PROTO,
+    crushers: CRUSHERS.map((c) => ({ y: c.y0, vy: 0, flag: 0 })),
     dead: false,
     frame: 0,
   };
@@ -344,17 +362,13 @@ function rectHit(a, b) {
 // and the moving platforms (which iniLevel marks semi = true).
 function activePlats(s, world, out) {
   out.length = 0;
+  let ci = 0;
   for (let i = 0; i < STATIC_PLATS.length; i++) {
     const p = STATIC_PLATS[i];
     if (p.stomper) {
-      out.push({
-        l: p.l,
-        t: s.stomperY,
-        r: p.l + p.w,
-        b: s.stomperY + p.h,
-        semi: 0,
-        isStomper: true,
-      });
+      // Solid in every state, resting or not -- only its top edge moves.
+      const y = s.crushers[ci++].y;
+      out.push({ l: p.l, t: y, r: p.l + p.w, b: y + p.h, semi: 0, isStomper: true });
     } else {
       out.push(p);
     }
@@ -380,25 +394,36 @@ function step(prev, input, cfg) {
   s.inv--;
   if (s.inv <= 0) s.inv = 0;
 
-  // --- stomperCode --- (runs before platMoveCode in update())
-  if (!s.stomperGone) {
-    if (
-      !s.stomperFall &&
-      s.y <= STOMPER_TRIG_Y &&
-      s.x > STOMPER_TRIG_XMIN &&
-      s.x < STOMPER_TRIG_XMAX
-    ) {
-      s.stomperFall = true;
-      s.stomperVY = 0;
+  // --- stomperCode --- (runs before platMoveCode in update(), once per crusher)
+  // The shallow copy above shares the crusher array with prev, so give this frame its own.
+  s.crushers = prev.crushers.map((c) => ({ ...c }));
+  for (let ci = 0; ci < CRUSHERS.length; ci++) {
+    const c = CRUSHERS[ci];
+    const st = s.crushers[ci];
+    if (st.flag === 2) continue; // landed one-shot: inert for the rest of the run
+    if (st.flag === 3) {
+      // Resting before it climbs back. The frame it resets it cannot also re-trigger.
+      if (--st.vy <= 0) {
+        st.y = c.y0;
+        st.vy = 0;
+        st.flag = 0;
+      }
+      continue;
     }
-    if (s.stomperFall) {
-      s.stomperVY += STOMPER_ACCEL;
-      s.stomperY += Math.round(s.stomperVY);
+    // A crusher that arms this frame also takes its first fall step this frame, exactly as the
+    // stock routine does (that step moves it 0px, since Math.round(0.25) is 0).
+    if (st.flag === 0 && s.y <= c.trigY && s.x > c.trigXmin && s.x < c.trigXmax) {
+      st.flag = 1;
+      st.vy = 0;
+    }
+    if (st.flag === 1) {
+      st.vy += c.accel;
+      st.y += Math.round(st.vy);
       const box = {
-        l: STOMPER_PROTO.l,
-        t: s.stomperY,
-        r: STOMPER_PROTO.l + STOMPER_PROTO.w,
-        b: s.stomperY + STOMPER_PROTO.h,
+        l: c.proto.l,
+        t: st.y,
+        r: c.proto.l + c.proto.w,
+        b: st.y + c.proto.h,
       };
       if (sprtHit(s, box)) {
         // killSprite(stomper, damage). Vanilla's 10 is lethal at every energy tier; a map that
@@ -406,9 +431,14 @@ function step(prev, input, cfg) {
         s.dead = true;
         return s;
       }
-      if (s.stomperY >= STOMPER_FALL_TO) {
-        s.stomperY = STOMPER_FALL_TO;
-        s.stomperGone = true;
+      if (st.y >= c.fallTo) {
+        st.y = c.fallTo;
+        if (c.repeat) {
+          st.flag = 3;
+          st.vy = c.resetIn;
+        } else {
+          st.flag = 2;
+        }
       }
     }
   }
@@ -561,9 +591,7 @@ module.exports = {
   SPAWN,
   KOL_W,
   KOL_H,
-  STOMPER_PROTO,
-  STOMPER_TRIG_XMIN,
-  STOMPER_TRIG_XMAX,
+  CRUSHERS,
   moveAccel,
   jumpImpulse,
   timerSeconds,

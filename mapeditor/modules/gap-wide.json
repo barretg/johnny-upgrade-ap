@@ -1,0 +1,71 @@
+{
+ "name": "gap-wide",
+ "version": 1,
+ "tags": [
+  "gap",
+  "speed",
+  "jump"
+ ],
+ "objects": [
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 0,
+   "w": 600,
+   "h": 400
+  },
+  {
+   "kind": "plat",
+   "x": 1265,
+   "y": 0,
+   "w": 600,
+   "h": 400
+  }
+ ],
+ "entry": {
+  "x": 0,
+  "y": 0
+ },
+ "exit": {
+  "x": 1865,
+  "y": 0
+ },
+ "expect": {
+  "minRung": 20,
+  "tolerance": 1,
+  "why": "A 665px level gap, sized to land between rung 18 (spd6/jmp6, about 636px) and rung 20 (spd7, about 694px). Tolerance 1 because the reach model is a hand calculation and the search can only start a jump on a stride boundary, which costs up to three frames of run-up."
+ },
+ "size": {
+  "w": 1865,
+  "h": 400
+ },
+ "solve": {
+  "hash": "ad52a7c75d6a",
+  "settings": {
+   "recoilBoost": false,
+   "knockbackBoost": false,
+   "stride": 4,
+   "qPos": 6,
+   "qVx": 1,
+   "qVy": 1,
+   "phaseMod": 100,
+   "phaseBucket": 10,
+   "hazardPad": 120,
+   "beamCell": 16,
+   "beamCap": 64,
+   "maxFrames": 9000,
+   "hashBits": 25
+  },
+  "minRung": 20,
+  "combo": {
+   "spdTier": 7,
+   "jmpTier": 6,
+   "doubleJump": true,
+   "energyTier": 3,
+   "ammoTier": 3
+  },
+  "frames": 256,
+  "arena": "mapeditor/maps/module-gap-wide.json",
+  "solvedAt": "2026-08-27"
+ }
+}

@@ -1,0 +1,75 @@
+{
+ "name": "crusher-gate",
+ "version": 1,
+ "tags": [
+  "crusher",
+  "speed"
+ ],
+ "objects": [
+  {
+   "kind": "plat",
+   "x": 674,
+   "y": 0,
+   "w": 200,
+   "h": 900,
+   "stomper": 1,
+   "trigX": 0,
+   "trigW": 200,
+   "trigY": 2900,
+   "fallTo": 1860
+  },
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 2760,
+   "w": 2400,
+   "h": 200
+  }
+ ],
+ "entry": {
+  "x": 0,
+  "y": 2760
+ },
+ "exit": {
+  "x": 2400,
+  "y": 2760
+ },
+ "expect": {
+  "minRung": 17,
+  "tolerance": 1,
+  "why": "Outrun the slab. It arms as Johnny crosses x 0..200 and falls 1860px at 0.25 px/frame^2, so its bottom reaches his head (2670) after about 119 frames; by then he must be clear of its right edge, x >= 904. That needs 7.60 px/frame, between spd5 (7.2) and spd6 (8.0), so rung 17. The slab is 900px tall, far above any jump, so there is no route over it, and once it lands it seals the corridor for good. This is the module that exercises multi-crusher state end to end."
+ },
+ "size": {
+  "w": 2400,
+  "h": 2960
+ },
+ "solve": {
+  "hash": "76b2021627fe",
+  "settings": {
+   "recoilBoost": false,
+   "knockbackBoost": false,
+   "stride": 4,
+   "qPos": 6,
+   "qVx": 1,
+   "qVy": 1,
+   "phaseMod": 100,
+   "phaseBucket": 10,
+   "hazardPad": 120,
+   "beamCell": 16,
+   "beamCap": 64,
+   "maxFrames": 9000,
+   "hashBits": 25
+  },
+  "minRung": 17,
+  "combo": {
+   "spdTier": 6,
+   "jmpTier": 5,
+   "doubleJump": true,
+   "energyTier": 3,
+   "ammoTier": 2
+  },
+  "frames": 348,
+  "arena": "mapeditor/maps/module-crusher-gate.json",
+  "solvedAt": "2026-08-27"
+ }
+}

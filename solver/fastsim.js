@@ -44,55 +44,82 @@ const N_PLAT = N_STATIC + N_PM;
 
 // PL[i*5 + 0..4] = l, t, r, b, semi
 const PL = new Float64Array(N_PLAT * 5);
-let STOMPER_IDX = -1;
-let STOMPER_H = 0;
-let STOMPER_L = 0;
-let STOMPER_R = 0;
 M.plats.forEach((ob, i) => {
   PL[i * 5 + 0] = ob.x;
   PL[i * 5 + 1] = ob.y;
   PL[i * 5 + 2] = ob.right;
   PL[i * 5 + 3] = ob.bottom;
   PL[i * 5 + 4] = ob.semi ? 1 : 0;
-  if (ob.stomper) {
-    STOMPER_IDX = i;
-    STOMPER_H = ob.h;
-    STOMPER_L = ob.x;
-    STOMPER_R = ob.right;
-  }
 });
 for (let i = 0; i < N_PM; i++) PL[(N_STATIC + i) * 5 + 4] = 1; // platMoves are semi
 
-// mapkit/crushers.js drives each crusher from its own map data, defaulting per field to the
-// vanilla constant. physics.js reads the same fields with the same defaults -- see the longer
-// note there, including why a map with several crushers, or a repeating one, is refused.
-const STOMPER_SPEC = STOMPER_IDX >= 0 ? M.plats[STOMPER_IDX] : {};
+// Crushers.
+//
+// mapkit/crushers.js drives EVERY stomper platform from its own map data, defaulting per field
+// to the vanilla constant. The solver has to model whatever the runtime will actually do, so it
+// reads the same fields with the same defaults -- a vanilla map, which states none of them,
+// still gets exactly the stock trigger band (x + 200, 80 wide, y <= 360), 0.25 accel and a
+// resting y of -60. physics.js reads the same table.
+//
+// A map may have any number of them, or none. With none, every crusher branch below is simply
+// skipped; the per-crusher state that used to be three scalars is now three per crusher (see
+// S_CR0), and how finely the dedup key tells crusher positions apart is decided per run in
+// search() against the 53-bit key budget.
 const cnum = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
-const STOMPER_TRIG_XMIN = cnum(STOMPER_SPEC.trigX, STOMPER_L + 200);
-const STOMPER_TRIG_XMAX = STOMPER_TRIG_XMIN + cnum(STOMPER_SPEC.trigW, 80);
-const STOMPER_TRIG_Y = cnum(STOMPER_SPEC.trigY, 360);
-const STOMPER_ACCEL = cnum(STOMPER_SPEC.accel, 0.25);
-const STOMPER_FALL_TO = cnum(STOMPER_SPEC.fallTo, -60);
+const CRUSHER_SPECS = [];
+M.plats.forEach((ob, i) => {
+  if (!ob.stomper) return;
+  const trigXmin = cnum(ob.trigX, ob.x + 200);
+  CRUSHER_SPECS.push({
+    idx: i,
+    y0: ob.y,
+    h: ob.h,
+    l: ob.x,
+    r: ob.right,
+    trigXmin,
+    trigXmax: trigXmin + cnum(ob.trigW, 80),
+    trigY: cnum(ob.trigY, 360),
+    accel: cnum(ob.accel, 0.25),
+    fallTo: cnum(ob.fallTo, -60),
+    // A repeating crusher climbs back to its start after resting `resetIn` frames and can then
+    // fire again; a one-shot one stays where it landed forever (Crushers.install sets its
+    // trigY to -Infinity, and the stock stomperCode simply discards it).
+    repeat: !!ob.repeat,
+    resetIn: cnum(ob.resetIn, 90),
+  });
+});
+const N_CR = CRUSHER_SPECS.length;
 
-// Neither simulator models more than one crusher, nor a repeating one: both would need extra
-// per-state variables. Refuse such a map rather than silently simulating a hazard that is not
-// there -- under-modelling a lethal obstacle LOOSENS logic, which is the direction that
-// generates unbeatable seeds.
-{
-  const stompers = M.plats.filter((pl) => pl.stomper);
-  if (stompers.length > 1) {
-    throw new Error(
-      'This map has ' + stompers.length + ' crushers; the solver models at most one. ' +
-        'Multi-crusher support needs per-crusher state in fastsim.js.'
-    );
-  }
-  if (stompers.some((pl) => pl.repeat)) {
-    throw new Error('This map has a repeating crusher; the solver models one-shot crushers only.');
-  }
-}
-// A map need not have a crusher at all; when it does not, the stomper state starts 'spent'
-// (S_SF = 2) and every branch below is skipped.
-const STOMPER_Y0 = STOMPER_IDX >= 0 ? M.plats[STOMPER_IDX].y : 0;
+// Flat mirrors so the per-frame loop never reads an object property.
+const CR_IDX = new Int32Array(N_CR);
+const CR_Y0 = new Float64Array(N_CR);
+const CR_H = new Float64Array(N_CR);
+const CR_L = new Float64Array(N_CR);
+const CR_R = new Float64Array(N_CR);
+const CR_TXMIN = new Float64Array(N_CR);
+const CR_TXMAX = new Float64Array(N_CR);
+const CR_TY = new Float64Array(N_CR);
+const CR_ACCEL = new Float64Array(N_CR);
+const CR_FALLTO = new Float64Array(N_CR);
+const CR_REPEAT = new Uint8Array(N_CR);
+const CR_RESET = new Float64Array(N_CR);
+// Which static platform rows are crushers, for the bullet wall test.
+const IS_CRUSHER = new Uint8Array(N_STATIC);
+CRUSHER_SPECS.forEach((c, n) => {
+  CR_IDX[n] = c.idx;
+  CR_Y0[n] = c.y0;
+  CR_H[n] = c.h;
+  CR_L[n] = c.l;
+  CR_R[n] = c.r;
+  CR_TXMIN[n] = c.trigXmin;
+  CR_TXMAX[n] = c.trigXmax;
+  CR_TY[n] = c.trigY;
+  CR_ACCEL[n] = c.accel;
+  CR_FALLTO[n] = c.fallTo;
+  CR_REPEAT[n] = c.repeat ? 1 : 0;
+  CR_RESET[n] = c.resetIn;
+  IS_CRUSHER[c.idx] = 1;
+});
 
 // Static spike rectangles (ldat.spikes). Lasers/enemies/bombs join `spikes` at runtime but move,
 // so they live in the per-frame hazard table instead.
@@ -111,6 +138,21 @@ M.spikes.forEach((ob, i) => {
 const N_ENE = M.enes.length;
 const N_BOMB = M.bombs.length;
 const N_LASER = M.lasers.length;
+
+// Laser hitboxes.
+//
+// iniLevel() force-rotates the FIRST laser in the array to a horizontal 590px beam and gives
+// every other one the stock 40x180 upright box -- a hand-tuned detail of the vanilla level.
+// mapkit/patcher.js's freeLasers unpins both per laser, so the solver has to read the same
+// fields with the same fallbacks or it models a beam of a different shape than the one that
+// will actually hurt the player. A laser that states nothing keeps the stock behaviour, so
+// vanilla is untouched. Half the beam sits either side of the sprite, which is anchored at
+// its centre.
+function laserOffset(spec, i) {
+  const horizontal = spec.horizontal === undefined ? i === 0 : !!spec.horizontal;
+  const half = Math.max(8, Number(spec.length) || (horizontal ? 590 : 180)) / 2;
+  return horizontal ? [-half, -20, half, 20] : [-20, -half, 20, half];
+}
 const N_HAZ = N_ENE + N_BOMB + N_LASER;
 
 let MAXF = 0;
@@ -207,7 +249,7 @@ function buildWorld(maxFrames) {
     }
     for (let i = 0; i < N_LASER; i++) {
       const L = M.lasers[i];
-      const off = i === 0 ? [-295, -20, 295, 20] : [-20, -90, 20, 90];
+      const off = laserOffset(L, i);
       // laserCode: ctCurr--, goes noKol at ctSwitch, resets to ctMax at <=0.
       let active;
       if (f === 0) active = true;
@@ -324,16 +366,18 @@ const S_X = 0,
   S_VX = 2,
   S_VY = 3,
   S_JU = 4,
-  S_SY = 5, // stomper y
-  S_SVY = 6, // stomper fall velocity
-  S_SF = 7, // 0 armed, 1 falling, 2 spent
-  S_PU = 8, // platUnder: -1 or moving-platform index
-  S_SC = 9, // facing
-  S_HP = 10,
-  S_INV = 11,
-  S_AMMO = 12, // bullets left (getGun: round(ammo.v * 20) = 2 per tier)
-  S_KILL = 13, // bitmask of hazards shot dead this run; killRobot/hitBomb are permanent
-  S_N = 14;
+  S_PU = 5, // platUnder: -1 or moving-platform index
+  S_SC = 6, // facing
+  S_HP = 7,
+  S_INV = 8,
+  S_AMMO = 9, // bullets left (getGun: round(ammo.v * 20) = 2 per tier)
+  S_KILL = 10, // bitmask of hazards shot dead this run; killRobot/hitBomb are permanent
+  // Three slots per crusher, in CRUSHER_SPECS order:
+  //   +0  y           current top edge
+  //   +1  vy / wait   fall velocity while falling, frames left while waiting to reset
+  //   +2  flag        0 armed, 1 falling, 2 at rest, 3 waiting to reset (repeat only)
+  S_CR0 = 11,
+  S_N = S_CR0 + 3 * N_CR;
 
 const scratch = new Float64Array(S_N);
 
@@ -393,7 +437,7 @@ function fireBullet(s, frame) {
     // bulletHitWall: any solid stops it.
     for (let i = 0; i < N_STATIC; i++) {
       const b = i * 5;
-      if (i === STOMPER_IDX) continue;
+      if (IS_CRUSHER[i]) continue;
       if (bl < PL[b + 2] && br > PL[b] && bt < PL[b + 3] && bb > PL[b + 1]) return;
     }
     // bulletHitEnemy: iterates `spikes`, so static spikes/lasers/saws absorb the shot too.
@@ -422,28 +466,44 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
     if (s[S_INV] < 0) s[S_INV] = 0;
   }
 
-  // stomperCode
-  if (s[S_SF] !== 2) {
-    if (
-      s[S_SF] === 0 &&
-      s[S_Y] <= STOMPER_TRIG_Y &&
-      s[S_X] > STOMPER_TRIG_XMIN &&
-      s[S_X] < STOMPER_TRIG_XMAX
-    ) {
-      s[S_SF] = 1;
-      s[S_SVY] = 0;
+  // stomperCode, once per crusher. Ordering matches the stock routine: a crusher that arms this
+  // frame also takes its first fall step this frame (which moves it 0px, since round(0.25) = 0).
+  for (let c = 0; c < N_CR; c++) {
+    const cb = S_CR0 + c * 3;
+    const fl = s[cb + 2];
+    if (fl === 2) continue; // one-shot, already landed: inert for the rest of the run
+    if (fl === 3) {
+      // Resting before it climbs back. It is still solid at fallTo the whole time, and the
+      // frame it resets it cannot also re-trigger.
+      if (--s[cb + 1] <= 0) {
+        s[cb] = CR_Y0[c];
+        s[cb + 1] = 0;
+        s[cb + 2] = 0;
+      }
+      continue;
     }
-    if (s[S_SF] === 1) {
-      s[S_SVY] += STOMPER_ACCEL;
-      s[S_SY] += Math.round(s[S_SVY]);
-      const t = s[S_SY];
-      const b = t + STOMPER_H;
-      if (s[S_X] - KOL_W < STOMPER_R && s[S_X] + KOL_W > STOMPER_L && s[S_Y] - KOL_H < b && s[S_Y] > t) {
+    if (fl === 0) {
+      if (s[S_Y] <= CR_TY[c] && s[S_X] > CR_TXMIN[c] && s[S_X] < CR_TXMAX[c]) {
+        s[cb + 2] = 1;
+        s[cb + 1] = 0;
+      }
+    }
+    if (s[cb + 2] === 1) {
+      s[cb + 1] += CR_ACCEL[c];
+      s[cb] += Math.round(s[cb + 1]);
+      const t = s[cb];
+      const b = t + CR_H[c];
+      if (s[S_X] - KOL_W < CR_R[c] && s[S_X] + KOL_W > CR_L[c] && s[S_Y] - KOL_H < b && s[S_Y] > t) {
         return 1; // killSprite(stomper, 10): lethal at every energy tier
       }
-      if (s[S_SY] >= STOMPER_FALL_TO) {
-        s[S_SY] = STOMPER_FALL_TO;
-        s[S_SF] = 2;
+      if (s[cb] >= CR_FALLTO[c]) {
+        s[cb] = CR_FALLTO[c];
+        if (CR_REPEAT[c]) {
+          s[cb + 2] = 3;
+          s[cb + 1] = CR_RESET[c];
+        } else {
+          s[cb + 2] = 2;
+        }
       }
     }
   }
@@ -467,11 +527,12 @@ function stepFrame(s, frame, dir, jump, spd, jh, jumpMax, shoot) {
     PL[base + 2] = px + 100;
     PL[base + 3] = py + 60;
   }
-  // And the stomper's current vertical extent.
-  if (STOMPER_IDX >= 0) {
-    const base = STOMPER_IDX * 5;
-    PL[base + 1] = s[S_SY];
-    PL[base + 3] = s[S_SY] + STOMPER_H;
+  // And each crusher's current vertical extent. They are solid in every state, resting or not.
+  for (let c = 0; c < N_CR; c++) {
+    const base = CR_IDX[c] * 5;
+    const y = s[S_CR0 + c * 3];
+    PL[base + 1] = y;
+    PL[base + 3] = y + CR_H[c];
   }
 
   // controls()
@@ -661,7 +722,7 @@ function buildHazardZones(pad) {
     ]);
   }
   M.lasers.forEach((L, i) => {
-    const o = i === 0 ? [-295, -20, 295, 20] : [-20, -90, 20, 90];
+    const o = laserOffset(L, i);
     z.push([L.x + o[0] - pad, L.y + o[1] - pad, L.x + o[2] + pad, L.y + o[3] + pad]);
   });
   for (const p of M.platMove) {
@@ -698,7 +759,6 @@ function search(opts = {}) {
   const nvy = Math.ceil(95 * o.qVy) + Math.ceil(25 * o.qVy) + 4;
   const nvyOff = Math.ceil(25 * o.qVy) + 2;
   const nphase = Math.ceil(o.phaseMod / o.phaseBucket) + 1;
-  const nstom = 35;
   // Energy only widens the state space when there is more than one heart to spend: at tier 1 any
   // contact is fatal, so hearts and i-frames are constants and stay out of the key.
   const trackDamage = o.energyTier > 1;
@@ -722,6 +782,66 @@ function search(opts = {}) {
   const nkill = 1 << tracked.length;
   const nammo = hasGun ? startAmmo + 1 : 1;
 
+  // --- crusher resolution in the dedup key ---------------------------------------------------
+  //
+  // The simulation always carries each crusher's exact y; this only decides how finely two
+  // states that differ *only* in where a crusher is get told apart. Coarser buckets merge
+  // states, which can remove routes but never invent them -- the safe direction, and the same
+  // trade every other quantization knob here makes. What is NOT safe is dropping crusher state
+  // from the key altogether: that makes "stand still and wait for it to fall" a fixed point and
+  // silently deletes the routes that depend on waiting, so every crusher keeps at least its
+  // armed / falling / at-rest distinction no matter how tight the budget gets.
+  //
+  // Digit layout per crusher, chosen to reproduce the single-crusher encoding exactly so a
+  // vanilla atlas built before this stays valid:
+  //   0                     armed
+  //   1                     falling, when bf is 0 -- otherwise unused
+  //   2                     at rest (one-shot landed, or a repeater sitting at fallTo)
+  //   3 .. 3+bf-1           falling, bucketed by how far it has fallen
+  //   3+bf .. 3+bf+bw-1     waiting to reset (repeating crushers only)
+  // Radix 3 + bf + bw, i.e. 35 at bf = 32 with no repeat, which is what the old code used, and
+  // 3 at the floor -- armed / falling / at rest, the distinction that must never be given up.
+  //
+  // The whole key must stay under 2^53 to be an exact integer, so the crusher digits get
+  // whatever is left after position, velocity, jump count, hazard phase, hearts/i-frames and
+  // ammo/kills have taken their share. bf is turned down uniformly until the product fits.
+  const keyBase =
+    nx * ny * nvx * nvy * 3 * nphase *
+    (trackDamage ? nhp * ninv : 1) *
+    (hasGun ? nammo * nkill : 1);
+  const crusherRoom = Math.pow(2, 53) / keyBase;
+  let bf = 32;
+  const bwFor = (b) => Math.min(8, b);
+  const radixProduct = (b) => {
+    let prod = 1;
+    for (let c = 0; c < N_CR; c++) prod *= 3 + b + (CR_REPEAT[c] ? bwFor(b) : 0);
+    return prod;
+  };
+  while (bf > 0 && radixProduct(bf) > crusherRoom) bf--;
+  if (N_CR && radixProduct(bf) > crusherRoom) {
+    throw new Error(
+      'This map has ' + N_CR + ' crushers; at this combo the dedup key has room for at most ' +
+        Math.floor(Math.log(crusherRoom) / Math.log(3)) + '. Each one costs a factor of 3 even ' +
+        'with its position fully merged (armed / falling / at rest is the least that can be ' +
+        'tracked without turning "wait for it to fall" into a fixed point), and the packed key ' +
+        'must stay under 2^53. Use fewer crushers, or shrink another key dimension in settings.js.'
+    );
+  }
+  const CR_BF = new Int32Array(N_CR);
+  const CR_BW = new Int32Array(N_CR);
+  const CR_RADIX = new Int32Array(N_CR);
+  const CR_KBASE = new Float64Array(N_CR); // y of fall bucket 0's lower edge
+  const CR_KSTEP = new Float64Array(N_CR);
+  for (let c = 0; c < N_CR; c++) {
+    CR_BF[c] = bf;
+    CR_BW[c] = CR_REPEAT[c] ? bwFor(bf) : 0;
+    CR_RADIX[c] = 3 + CR_BF[c] + CR_BW[c];
+    // 20px buckets, widened only when the fall is too long to cover at that size. Vanilla's
+    // 420px-tall slab falling from -420 to -60 keeps the original 20px/-440 grid exactly.
+    CR_KBASE[c] = CR_Y0[c] - 20;
+    CR_KSTEP[c] = CR_BF[c] ? Math.max(20, Math.ceil((CR_FALLTO[c] - CR_Y0[c] + 40) / CR_BF[c])) : 1;
+  }
+
   let lastPhase = 0; // set by keyOf, consumed by beamAdmit
   function keyOf(s, frame) {
     let qx = Math.round((s[S_X] + 1800) / o.qPos);
@@ -737,7 +857,6 @@ function search(opts = {}) {
     if (qvy < 0) qvy = 0;
     else if (qvy >= nvy) qvy = nvy - 1;
     const ju = s[S_JU] >= 2 ? 2 : s[S_JU];
-    let stom = s[S_SF] === 2 ? 2 : s[S_SF] === 0 ? 0 : 3 + Math.min(31, Math.max(0, Math.round((s[S_SY] + 440) / 20)));
     let phase = 0;
     for (let i = 0; i < NZ; i++) {
       const b = i * 4;
@@ -752,7 +871,33 @@ function search(opts = {}) {
     k = k * nvx + qvx;
     k = k * nvy + qvy;
     k = k * 3 + ju;
-    k = k * nstom + stom;
+    for (let c = 0; c < N_CR; c++) {
+      const cb = S_CR0 + c * 3;
+      const fl = s[cb + 2];
+      let d;
+      if (fl === 0) d = 0;
+      else if (fl === 2) d = 2;
+      else if (fl === 1) {
+        if (CR_BF[c] === 0) d = 1; // no room to bucket the fall; "falling" is one state
+        else {
+          let q = Math.round((s[cb] - CR_KBASE[c]) / CR_KSTEP[c]);
+          if (q < 0) q = 0;
+          else if (q >= CR_BF[c]) q = CR_BF[c] - 1;
+          d = 3 + q;
+        }
+      } else {
+        // Waiting to climb back: the remaining wait, coarsely, so a repeater's cycle is not a
+        // fixed point. With no wait buckets it collapses to "at rest", which merges states.
+        if (CR_BW[c] === 0) d = 2;
+        else {
+          let q = Math.floor((s[cb + 1] * CR_BW[c]) / CR_RESET[c]);
+          if (q < 0) q = 0;
+          else if (q >= CR_BW[c]) q = CR_BW[c] - 1;
+          d = 3 + CR_BF[c] + q;
+        }
+      }
+      k = k * CR_RADIX[c] + d;
+    }
     k = k * nphase + phase;
     if (trackDamage) {
       k = k * nhp + s[S_HP];
@@ -853,9 +998,11 @@ function search(opts = {}) {
   scratch[S_VX] = 0;
   scratch[S_VY] = 1;
   scratch[S_JU] = 0;
-  scratch[S_SY] = STOMPER_Y0;
-  scratch[S_SVY] = 0;
-  scratch[S_SF] = STOMPER_IDX >= 0 ? 0 : 2;
+  for (let c = 0; c < N_CR; c++) {
+    scratch[S_CR0 + c * 3] = CR_Y0[c];
+    scratch[S_CR0 + c * 3 + 1] = 0;
+    scratch[S_CR0 + c * 3 + 2] = 0;
+  }
   scratch[S_PU] = -1;
   scratch[S_SC] = 1;
   scratch[S_HP] = o.energyTier;
@@ -874,6 +1021,9 @@ function search(opts = {}) {
     truncated: false,
     hitFrameLimit: false,
     beamRejected: 0,
+    // How much of the key budget the crushers got. 32 is full resolution; lower means this
+    // combo's key was tight enough that crusher positions are being merged more coarsely.
+    crusherFallBuckets: N_CR ? bf : 0,
   };
 
   for (let f = 0; f + o.stride <= o.maxFrames; f += o.stride) {
@@ -953,8 +1103,34 @@ function search(opts = {}) {
   return { coinFrame, coinsFound, gunFrame, gateFrame, shotFrame, stats };
 }
 
+// Enough of the internals for test-physics.js to step this simulator frame-for-frame beside
+// physics.js and check they still agree. Nothing else should reach in here.
+const _internals = {
+  stepFrame,
+  buildWorld,
+  N_CR,
+  CRUSHER_SPECS,
+  SPAWN_X,
+  SPAWN_Y,
+  S_X, S_Y, S_VX, S_VY, S_JU, S_PU, S_SC, S_HP, S_INV, S_AMMO, S_KILL, S_CR0, S_N,
+  newState() {
+    const s = new Float64Array(S_N);
+    s[S_X] = SPAWN_X;
+    s[S_Y] = SPAWN_Y;
+    s[S_VY] = 1;
+    s[S_PU] = -1;
+    s[S_SC] = 1;
+    for (let c = 0; c < N_CR; c++) {
+      s[S_CR0 + c * 3] = CR_Y0[c];
+      s[S_CR0 + c * 3 + 2] = 0;
+    }
+    return s;
+  },
+};
+
 module.exports = {
   M,
+  _internals,
   COINS,
   KILLABLE,
   N_COIN,

@@ -1,0 +1,63 @@
+{
+ "name": "flat-run",
+ "version": 1,
+ "tags": [
+  "floor",
+  "control"
+ ],
+ "objects": [
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 0,
+   "w": 600,
+   "h": 200
+  }
+ ],
+ "entry": {
+  "x": 0,
+  "y": 0
+ },
+ "exit": {
+  "x": 600,
+  "y": 0
+ },
+ "expect": {
+  "minRung": 1,
+  "tolerance": 0,
+  "why": "Walk in a straight line. Rung 0 has Speed 0 and moveAccel(0) is 0, so Johnny cannot move at all; rung 1 is the first Speed. If this ever grades above 1, the harness is calling everything hard."
+ },
+ "size": {
+  "w": 600,
+  "h": 200
+ },
+ "solve": {
+  "hash": "cde92e1bab0d",
+  "settings": {
+   "recoilBoost": false,
+   "knockbackBoost": false,
+   "stride": 4,
+   "qPos": 6,
+   "qVx": 1,
+   "qVy": 1,
+   "phaseMod": 100,
+   "phaseBucket": 10,
+   "hazardPad": 120,
+   "beamCell": 16,
+   "beamCap": 64,
+   "maxFrames": 9000,
+   "hashBits": 25
+  },
+  "minRung": 1,
+  "combo": {
+   "spdTier": 1,
+   "jmpTier": 0,
+   "doubleJump": false,
+   "energyTier": 1,
+   "ammoTier": 0
+  },
+  "frames": 240,
+  "arena": "mapeditor/maps/module-flat-run.json",
+  "solvedAt": "2026-08-27"
+ }
+}

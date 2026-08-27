@@ -1,0 +1,70 @@
+{
+ "name": "gap-double-jump",
+ "version": 1,
+ "tags": [
+  "gap",
+  "doubleJump"
+ ],
+ "objects": [
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 0,
+   "w": 600,
+   "h": 400
+  },
+  {
+   "kind": "plat",
+   "x": 900,
+   "y": 0,
+   "w": 600,
+   "h": 400
+  }
+ ],
+ "entry": {
+  "x": 0,
+  "y": 0
+ },
+ "exit": {
+  "x": 1500,
+  "y": 0
+ },
+ "expect": {
+  "minRung": 8,
+  "tolerance": 0,
+  "why": "A 300px level gap. One jump covers terminal speed (4*(0.8+0.2*spd)) times about 2*floor(12+1.1*jmp) frames of airtime, plus 60px of standing-box overhang: 228px at rung 7 (spd3/jmp3), which fails. Double Jump at rung 8 roughly doubles the airtime to about 396px, which clears it with 96px to spare. The biggest single step anywhere on the ladder, so this is the one gap module whose answer is not close to a boundary."
+ },
+ "size": {
+  "w": 1500,
+  "h": 400
+ },
+ "solve": {
+  "hash": "5e9e253db611",
+  "settings": {
+   "recoilBoost": false,
+   "knockbackBoost": false,
+   "stride": 4,
+   "qPos": 6,
+   "qVx": 1,
+   "qVy": 1,
+   "phaseMod": 100,
+   "phaseBucket": 10,
+   "hazardPad": 120,
+   "beamCell": 16,
+   "beamCap": 64,
+   "maxFrames": 9000,
+   "hashBits": 25
+  },
+  "minRung": 8,
+  "combo": {
+   "spdTier": 3,
+   "jmpTier": 3,
+   "doubleJump": true,
+   "energyTier": 2,
+   "ammoTier": 0
+  },
+  "frames": 332,
+  "arena": "mapeditor/maps/module-gap-double-jump.json",
+  "solvedAt": "2026-08-27"
+ }
+}

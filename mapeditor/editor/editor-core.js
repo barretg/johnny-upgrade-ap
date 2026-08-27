@@ -75,7 +75,7 @@ const KINDS = {
       resetIn:{ type:'number', label:'Reset delay', crusher:true,
         help:'Frames to wait before returning, when Resets is on. Blank uses 90.' },
       stomper:{ type:'bool', label:'Crusher',
-        help:'Falls when Johnny walks under it. There is no fall-distance field: it drops from its own y and stops at world y = -60, so distance = -60 minus y. The trigger band is x+200 to x+280 regardless of width, so a crusher narrower than 200px can never be set off. Only ONE crusher works per map, and it fires once. All of these are hardcoded and need patching per map.' },
+        help:'Falls when Johnny walks under it. The stock game hardcodes all of this - one crusher per map, firing once, dropping to world y = -60, triggered by an 80px band at x+200 that a crusher narrower than 200px can never reach. The runtime replaces that routine, so use as many as you like and set Falls to / Trigger / Resets below; leave a field blank to get the stock value.' },
     } },
   art: { label:'Texture', shape:'rect', color:'#c9a6ff', order:2,
     props:{ tile:'', rot:0, flipX:0, flipY:0, z:0 },

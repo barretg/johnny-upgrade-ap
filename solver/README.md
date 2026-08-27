@@ -100,7 +100,8 @@ unreachable; `closure()` respects that distinction.
 
 ```bash
 cd solver
-node test-physics.js                      # sanity-check the physics port
+node test-physics.js                      # sanity-check the physics port, and that the two
+                                          #   simulators still agree frame for frame
 node --max-old-space-size=6000 run-combo.js --loop --worker 0/8    # one worker per shell
 node status.js                            # coverage + what is still undetermined
 node report.js --py                       # emit the requirements
@@ -138,6 +139,34 @@ spot checks still hold.
 `--terms N` / `--coverage F` prune the antichain via greedy set cover if you ever want smaller
 rules; pruning only ever makes rules stricter. `requirements.json` always carries the unpruned
 `fullOptions` plus `noDamageOptions`.
+
+## Solving another map, and solving modules
+
+`JU_MAP=<path to a map json>` points every part of the solver at a map other than the vanilla
+one (`mapsource.js`); with it unset nothing changes, byte for byte. The map's identity goes into
+`settings.js` as `mapId`, so `atlas.js` refuses to read one map's results as another's, and the
+atlas lands in `out/map-<id>/` rather than `out/`.
+
+On top of that sits the module library, which is how a generated map gets graded without a sweep
+per candidate:
+
+```bash
+node solve-module.js                      # solve mapeditor/modules/*, check against expect
+node solve-module.js --write              # ...and store the answers in the module files
+```
+
+- `ladder.js` is the one ordered chain of 37 rungs (rung 0 = nothing bought, then one item each).
+  Rung k+1 dominates rung k on every axis, so the lowest rung that clears a module is found by
+  binary search in ~6 runs instead of 37.
+- `arena.js` wraps a module in the smallest real level that can be solved *and played*: entry
+  ledge, module, exit ledge, sealed box, lethal spike floor, one coin as the finish line. It is
+  deliberately the only arena builder in the repo — Phase 7's two-point probe will reuse it, and
+  two builders that disagreed would answer different questions while looking alike.
+- `solve-module.js` runs one child process per module, because `fastsim.js` derives its whole
+  world from the map at require() time.
+
+See `mapeditor/modules/README.md` for the module format and for why every module carries a
+hand-written expected rung.
 
 ## Conservatism
 

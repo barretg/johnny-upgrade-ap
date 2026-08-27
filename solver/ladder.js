@@ -1,0 +1,129 @@
+// The difficulty ladder: one ordered chain through the ability lattice.
+//
+// The generator, the module solver and the verifier all speak in rungs, and they must all mean
+// the same thing by "rung 12", so the order lives here and nowhere else.
+//
+// A rung is a full combo (speed, jump, doubleJump, energy, ammo, gun). Rung k+1 is rung k plus
+// exactly one item, so rung k+1 dominates rung k on every axis and never loses ground on any.
+// That is what makes a binary search for "the first rung that clears this module" valid under
+// the monotone-closure guarantee the whole solver rests on: reachable at a combo implies
+// reachable at every combo above it, so the set of rungs that clear a module is an up-set and
+// has exactly one boundary to find.
+//
+// Rung 0 is the start of a run: nothing bought. moveAccel(0) is 0 and jumpImpulse(0) is null, so
+// at rung 0 Johnny can neither walk nor jump -- a module that needs any movement at all comes
+// out at rung 1 or above, and only a module whose exit is already inside the spawn box solves at
+// rung 0. That is intentional: it makes "rung 0 clears it" a genuine signal that a module is
+// degenerate rather than easy.
+//
+// The item pool the logic can see, and which the 36 steps below spend exactly once each:
+//   Speed 10, Jump 10, Double Jump 1, Energy 4 (5 hearts total, base 1), Laser Gun 1, Ammo 10.
+
+// The order the items are spent in. This is a design choice, not a derivation: it is the shape
+// the generated map's progression will have, so it interleaves the two movement tracks, holds
+// Double Jump back until a couple of tiers of each are in, and spreads Energy across the run
+// rather than front-loading it.
+//
+// The gun and Ammo 1 are adjacent on purpose. The game gives you bullets as
+// getGun() -> Math.round(ammo.v * 20), so the gun with Ammo 0 fires nothing; the simulator sees
+// no difference between "no gun" and "gun, no ammo", which means a module that needs to shoot
+// comes out at the Ammo 1 rung. Both stay listed because both are real items in the pool.
+const TRACKS = [
+  'speed', 'jump', 'speed', 'jump', 'energy',
+  'speed', 'jump', 'doubleJump', 'speed', 'jump',
+  'gun', 'ammo', 'speed', 'jump', 'energy',
+  'ammo', 'speed', 'jump', 'ammo', 'speed',
+  'jump', 'energy', 'ammo', 'speed', 'jump',
+  'ammo', 'speed', 'jump', 'energy', 'ammo',
+  'speed', 'jump', 'ammo', 'ammo', 'ammo', 'ammo',
+];
+
+const POOL = { speed: 10, jump: 10, doubleJump: 1, energy: 4, gun: 1, ammo: 10 };
+
+// Fail loudly rather than generating a map against a ladder that spends the wrong items: this
+// list is edited by hand and a typo in it is invisible everywhere downstream.
+{
+  const spent = {};
+  for (const t of TRACKS) spent[t] = (spent[t] || 0) + 1;
+  for (const k of Object.keys(POOL)) {
+    if (spent[k] !== POOL[k]) {
+      throw new Error(`ladder.js spends ${spent[k] || 0} ${k}, but the item pool has ${POOL[k]}`);
+    }
+  }
+  for (const k of Object.keys(spent)) {
+    if (!(k in POOL)) throw new Error(`ladder.js spends an item the pool does not have: ${k}`);
+  }
+}
+
+// Rung 0 = nothing, then one entry per item.
+const RUNGS = [];
+{
+  // `energy` is TOTAL hearts, matching fastsim's energyTier -- 1 is the base heart, so the four
+  // Energy items take it to 5.
+  const at = { speed: 0, jump: 0, doubleJump: 0, energy: 1, gun: 0, ammo: 0 };
+  RUNGS.push({ index: 0, gained: null, ...at });
+  TRACKS.forEach((track, n) => {
+    at[track]++;
+    RUNGS.push({ index: n + 1, gained: track, ...at });
+  });
+}
+
+const N_RUNGS = RUNGS.length; // 37: rung 0 plus one per item
+
+/**
+ * The options a rung means to fastsim's `search`.
+ *
+ * `gun` does not appear: search() takes only ammoTier and treats any ammoTier > 0 as "has the
+ * gun", which is exactly the game's behaviour (no ammo, no shots). A caller that wants to know
+ * whether a rung has the gun item reads rung.gun.
+ */
+function searchOpts(rung) {
+  return {
+    spdTier: rung.speed,
+    jmpTier: rung.jump,
+    doubleJump: !!rung.doubleJump,
+    energyTier: rung.energy,
+    ammoTier: rung.ammo,
+  };
+}
+
+/** Short human label, e.g. "12 spd4/jmp4/dj1/e2/ammo1". */
+function label(rung) {
+  return (
+    `${rung.index} spd${rung.speed}/jmp${rung.jump}/dj${rung.doubleJump}` +
+    `/e${rung.energy}/ammo${rung.ammo}`
+  );
+}
+
+/**
+ * Binary search for the lowest rung at which `clears(rung)` is true.
+ *
+ * Valid only because the ladder is a chain: `clears` must be monotone, false up to some point
+ * and true from there on. `clears` returns true, false, or null for "this run could not tell"
+ * (a search that hit its frame or hash cap proves nothing) -- an unknown answer aborts rather
+ * than being guessed in either direction, since guessing "clears" is the direction that
+ * generates an unbeatable map.
+ *
+ * Returns { minRung, probed } or { minRung: null, probed, unknownAt } if it could not decide.
+ */
+function findMinRung(clears) {
+  const probed = [];
+  let lo = 0; // known-or-assumed floor
+  let hi = N_RUNGS - 1;
+  // The top rung has every item there is; if it cannot clear the module, nothing can.
+  const top = clears(RUNGS[hi]);
+  probed.push(hi);
+  if (top === null) return { minRung: null, probed, unknownAt: hi };
+  if (top === false) return { minRung: null, probed, unclearable: true };
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const r = clears(RUNGS[mid]);
+    probed.push(mid);
+    if (r === null) return { minRung: null, probed, unknownAt: mid };
+    if (r) hi = mid;
+    else lo = mid + 1;
+  }
+  return { minRung: lo, probed };
+}
+
+module.exports = { RUNGS, N_RUNGS, TRACKS, POOL, searchOpts, label, findMinRung };
