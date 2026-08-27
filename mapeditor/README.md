@@ -358,9 +358,16 @@ of the row:
 | `unsolved` red | no difficulty is known; the generator cannot use it |
 | `rung 12 ?` red | the hand-play verdict is **below** the solved rung, which is a physics bug rather than a difficulty correction |
 
-Clicking a row drops that module at the cursor, through the same `paste()` path
-the clipboard uses -- so ids, patrol ranges, trigger zones and singletons behave
-exactly as they do for a copy. **Save selection as module...** does the reverse:
+A module is a **tool**, not a button: clicking a row *arms* it -- the row
+highlights, the tool palette clears, and a ghost of what will be placed follows
+the cursor -- and the click on the **canvas** is what puts it down. It follows the
+editor's own placement rule from there: a click away from the group it just
+placed commits and clears, and only the next click stamps another, so a stray
+click never drops a module. Escape or any other tool puts it down. Placement goes
+through the same `paste()` path the clipboard uses, so ids, patrol ranges, trigger
+zones and singletons behave exactly as they do for a copy.
+
+**Save selection as module...** does the reverse:
 the selection's bounding box becomes the origin, entry and exit default to the
 leftmost and rightmost top surface, and both are draggable on the canvas (green
 and red) or typeable in the panel.

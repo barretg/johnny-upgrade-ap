@@ -70,10 +70,11 @@ The seven modules here were written by hand. Everything since has a tool:
   selected into a module file. The selection's bounding box becomes the origin,
   `entry`/`exit` default to the leftmost and rightmost top surface, and both are
   draggable on the canvas.
-- **Clicking a module in the panel** drops it into the map at the cursor, through
-  the same paste path the clipboard uses. The badge on the row is
-  `max(solve, handPlay)`, coloured by where the number came from, and `unsolved`
-  when there is no number at all.
+- **Clicking a module in the panel** arms it the way a tool is armed: a ghost
+  follows the cursor and the click on the canvas places it, through the same paste
+  path the clipboard uses. The badge on the row is `max(solve, handPlay)`,
+  coloured by where the number came from, and `unsolved` when there is no number
+  at all.
 - Provenance goes in `map.meta.modules` (`{ name, x, y, minRung }`) and never into
   a map's objects. `iniLevel()` ignores `meta`; `mapformat` forwards it whole.
 

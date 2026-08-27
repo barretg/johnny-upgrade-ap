@@ -266,6 +266,7 @@ const CSS = `
 #mde-root .mod { background:#12141a; border:1px solid var(--line); border-radius:5px;
   padding:5px 7px; cursor:pointer; display:grid; gap:2px; }
 #mde-root .mod:hover { border-color:var(--accent); }
+#mde-root .mod.sel { border-color:var(--accent); background:#2b3346; }
 #mde-root .mod .top { display:flex; gap:6px; align-items:baseline; justify-content:space-between; }
 #mde-root .mod .nm { font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #mde-root .mod .rung { font:600 10px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -325,7 +326,7 @@ const HTML = `
     <h2>Modules</h2>
     <div id="mde-modlist"></div>
     <button id="mde-modsave" style="width:100%;margin-top:6px">save selection as module…</button>
-    <div class="muted" style="margin-top:5px">Click a module to drop it at the cursor.</div>
+    <div class="muted" style="margin-top:5px" id="mde-modhint">Pick a module, then click the canvas to place it.</div>
   </div>
 </aside>
 
@@ -378,6 +379,7 @@ let lastWorld = { x:0, y:0 };
 let dragging = null, spaceDown = false;
 let artOnTop = true;
 let moduleLib = [];   // the library as io handed it over: whole records, stale parts already gone
+let pendingModule = null; // a module armed for placement, waiting for a click on the canvas
 let modDialog = null; // an open "save as module" dialog, with its entry/exit markers on the canvas
 let rafId = null;
 const listeners = [];   // [target, type, fn, opts], for destroy()
@@ -474,10 +476,11 @@ function paste() {
  * the caller's job, since a module drop wants one entry covering the provenance
  * record as well.
  */
-function pasteObjects(clipboard) {
+function pasteObjects(clipboard, at) {
+  const w = at || lastWorld;
   let x0 = Infinity, y0 = Infinity;
   for (const c of clipboard) { x0 = Math.min(x0, c.x); y0 = Math.min(y0, c.y); }
-  const dx = snap(lastWorld.x) - x0, dy = snap(lastWorld.y) - y0;
+  const dx = snap(w.x) - x0, dy = snap(w.y) - y0;
   const made = clipboard.map((c) => {
     const o = JSON.parse(JSON.stringify(c));
     o.id = nextId++;
@@ -685,13 +688,56 @@ function recordModuleUse(m, box) {
   map.meta.modules.push({ name: m.name, x: box.x, y: box.y, minRung: moduleRung(m).rung });
 }
 
-function dropModule(m) {
-  if (!m || !m.objects || !m.objects.length) return;
+/*
+ * A module is ARMED, then placed by a click on the canvas -- the same two-step
+ * every other tool uses. Placing it the instant its row was clicked meant it
+ * landed wherever the mouse had last been over the canvas, which is nowhere the
+ * hand was looking: the pointer was on the palette.
+ */
+function armModule(m) {
+  pendingModule = m && m.objects && m.objects.length ? m : null;
+  setTool('module');
+}
+
+function placeModule(w) {
+  const m = pendingModule;
+  if (!m) return;
   pushHistory();
-  const made = pasteObjects(m.objects.map((o) => Object.assign({}, o)));
+  const made = pasteObjects(m.objects.map((o) => Object.assign({}, o)), w);
   const box = groupBox(made);
   if (box) recordModuleUse(m, box);
   refresh();
+}
+
+/*
+ * What is about to be placed, and where. Point kinds get their icon box and rects
+ * get their real footprint, so a module whose size is its whole point -- a wide
+ * gap, a tall ledge -- is judged against the map before it is committed rather
+ * than after.
+ */
+function drawModuleGhost() {
+  if (tool !== 'module' || !pendingModule || dragging) return;
+  const objs = pendingModule.objects;
+  let x0 = Infinity, y0 = Infinity;
+  for (const o of objs) { x0 = Math.min(x0, o.x); y0 = Math.min(y0, o.y); }
+  const dx = snap(lastWorld.x) - x0, dy = snap(lastWorld.y) - y0;
+  ctx.save();
+  ctx.globalAlpha = 0.6;
+  ctx.lineWidth = 1.5 / view.z;
+  ctx.setLineDash([7 / view.z, 5 / view.z]);
+  for (const o of objs) {
+    const k = KINDS[o.kind];
+    if (!k) continue;
+    const b = bounds(o);
+    ctx.strokeStyle = k.color;
+    ctx.strokeRect(b.x + dx, b.y + dy, Math.max(b.w, 2), Math.max(b.h, 2));
+  }
+  const gb = groupBox(objs);
+  if (gb) {
+    ctx.strokeStyle = '#6ea8fe';
+    ctx.strokeRect(gb.x + dx, gb.y + dy, gb.w, gb.h);
+  }
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------- module panels
@@ -758,8 +804,9 @@ function buildModuleList() {
             '). That is a physics bug, not a difficulty correction. Re-run solve-module.js.'
         : r.played ? '\nrung ' + r.rung + ', hand-played in the real game.'
         : '\nrung ' + r.rung + ' -- solved only: physically possible, never played by a person.') +
-      '\n\nClick to drop it at the cursor.';
-    d.onclick = () => dropModule(m);
+      '\n\nClick to pick it up, then click the canvas to place it.';
+    d.dataset.module = m.name;
+    d.onclick = () => armModule(m);
     if (io.exportModule) {
       const ex = document.createElement('button');
       ex.className = 'ex'; ex.textContent = 'export';
@@ -800,7 +847,13 @@ function renderModuleDialog() {
   const el = $('modpanel');
   if (!el) return;
   if (!modDialog) return closeModuleDialog();
-  el.style.display = '';
+  /*
+   * 'block', not ''. The hidden state is `display:none` in the STYLESHEET, so
+   * clearing the inline value falls straight back to it and the panel stays
+   * invisible -- with its canvas markers drawn, which reads as "the editor did
+   * something and then refused to ask for a name".
+   */
+  el.style.display = 'block';
   el.innerHTML = '';
   const h = document.createElement('h3'); h.textContent = 'Save as module';
   el.appendChild(h);
@@ -1405,6 +1458,7 @@ function draw() {
   for (const o of s) drawSelection(o);
   if (s.length > 1) drawGroup(s);
   if (dragging && dragging.marquee) drawMarquee(dragging);
+  drawModuleGhost();
   drawModuleMarkers();
 }
 
@@ -1772,6 +1826,20 @@ function onMouseDown(e) {
     return;
   }
 
+  /*
+   * An armed module follows the same rule a freshly drawn box does: a click on the
+   * live selection moves it, a click away from it commits and clears, and only the
+   * NEXT click stamps another. A stray click never drops a module you did not want.
+   */
+  if (tool === 'module') {
+    if (!pendingModule) { setTool('select'); return; }
+    const held = selected().find((o) => hit(o, w.x, w.y));
+    if (held) { beginMove(w, held); return; }
+    if (sel.length) { sel = []; refresh(); return; }
+    placeModule(w);
+    return;
+  }
+
   if (tool !== 'select') {
     // A freshly drawn box stays live: dragging it moves it, so it can be placed
     // roughly and then nudged without a trip back to the select tool. Clicking
@@ -2028,6 +2096,21 @@ function setTool(t) {
   tool = t;
   [...root.querySelectorAll('#mde-tools button')].forEach((b) =>
     b.classList.toggle('on', b.dataset.tool === t));
+  /*
+   * An armed module is a tool like any other, so switching to a real tool -- or
+   * pressing escape, or ctrl-clicking blank space -- has to put it down. Anything
+   * else leaves a stamp armed behind a tool that looks selected.
+   */
+  if (t !== 'module') pendingModule = null;
+  const rows = root.querySelectorAll('#mde-modlist .mod');
+  [...rows].forEach((el) =>
+    el.classList.toggle('sel', !!pendingModule && el.dataset.module === pendingModule.name));
+  const hint = root.querySelector('#mde-modhint');
+  if (hint) {
+    hint.textContent = pendingModule
+      ? 'Click the canvas to place "' + pendingModule.name + '". Esc puts it down.'
+      : 'Pick a module, then click the canvas to place it.';
+  }
 }
 
 function buildTools() {
@@ -2705,6 +2788,6 @@ return {
   // handle positions are in world space and the tests need the same transform
   // the canvas uses, which no amount of reading the panels recovers exactly
   _state: () => ({ view, grid, tool, sel: sel.slice(), objects: map.objects, meta: map.meta,
-                   modules: moduleLib, dialog: modDialog, handleAt, bounds }),
+                   modules: moduleLib, armed: pendingModule, dialog: modDialog, handleAt, bounds }),
 };
 }));

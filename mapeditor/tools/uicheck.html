@@ -236,14 +236,55 @@ function modules() {
      'the badge shows max(solve, handPlay), not the solved rung',
      modRow && modRow.textContent.replace(/\s+/g, ' '));
 
-  ev('mousemove', 620, 480);
+  /*
+   * Arm, then place. A module is a tool: clicking its row picks it up, and the
+   * click on the CANVAS is what puts it down. Placing it the instant the row was
+   * clicked dropped it wherever the mouse had last crossed the canvas, which is
+   * never where the eye was -- the pointer was over the palette.
+   */
   const nBefore = S().objects.length;
   modRow.click();
+  ok(S().tool === 'module' && S().armed && S().armed.name === 'stub-gap',
+     'clicking a module row arms it instead of placing it', S().tool);
+  ok(S().objects.length === nBefore, 'and nothing is placed yet',
+     S().objects.length - nBefore);
+  ok(modRow.classList.contains('sel'), 'the armed row is highlighted like a tool button');
+
+  click(620, 480);
   const drop = S().sel.map((id) => S().objects.find((o) => o.id === id));
-  ok(S().objects.length === nBefore + 2, 'clicking a module drops it at the cursor',
+  ok(S().objects.length === nBefore + 2, 'clicking the canvas places it there',
      S().objects.length - nBefore);
   ok(drop.length === 2 && drop.every((o) => o && o.id),
-     'the dropped objects got ids through the paste path');
+     'the placed objects got ids through the paste path');
+  const at = box(drop);
+  const want = S().view;
+  ok(Math.abs(at.x - ((620 - want.x) / want.z)) <= S().grid &&
+     Math.abs(at.y - ((480 - want.y) / want.z)) <= S().grid,
+     'and it landed under the click, not under wherever the mouse had been',
+     [Math.round(at.x), Math.round(at.y)]);
+
+  // still armed: the editor's own rule is that a click away from a live selection
+  // commits it, and only the NEXT click stamps another
+  ok(S().tool === 'module' && !!S().armed, 'the module stays armed for another stamp');
+  click(120, 620);
+  ok(S().objects.length === nBefore + 2, 'a click away from the placed group only clears it',
+     S().objects.length - nBefore);
+  click(120, 620);
+  ok(S().objects.length === nBefore + 4, 'and the next click stamps a second copy',
+     S().objects.length - nBefore);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key:'z', ctrlKey:true, bubbles:true }));
+  ok(S().objects.length === nBefore + 2, 'ctrl+z takes back exactly one stamp',
+     S().objects.length - nBefore);
+  deselect();
+  ok(!S().armed && S().tool === 'select', 'picking another tool puts the module down');
+  /*
+   * Undo restores from a JSON snapshot, so every object in the map is a NEW one:
+   * anything captured before it is a detached copy, and editing it changes
+   * nothing. Re-select from the map and take fresh references.
+   */
+  selBox(at);
+  const live = S().sel.map((id) => S().objects.find((o) => o.id === id));
+  ok(live.length === 2, 're-selecting after an undo finds both objects', live.length);
   const prov = (S().meta.modules || [])[0];
   ok(prov && prov.name === 'stub-gap' && prov.minRung === 12,
      'provenance lands in map.meta.modules', prov && JSON.stringify(prov));
@@ -251,8 +292,18 @@ function modules() {
      'and no difficulty metadata is written into an object');
 
   q('modsave').click();
-  ok(q('modpanel').style.display !== 'none', 'save-as-module opens its panel');
-  const db = box(drop);
+  /*
+   * getComputedStyle, not style.display. The hidden state lives in the
+   * stylesheet, so an inline '' reads as "not none" while the panel is still
+   * invisible -- which is how this shipped once already.
+   */
+  ok(getComputedStyle(q('modpanel')).display !== 'none', 'save-as-module opens its panel',
+     getComputedStyle(q('modpanel')).display);
+  ok(q('modpanel').querySelectorAll('input').length >= 6,
+     'and it asks for a name, tags and both points',
+     q('modpanel').querySelectorAll('input').length);
+  ok(/Save as module/i.test(q('modpanel').textContent), 'with a heading saying what it is');
+  const db = box(live);
   const dlg = S().dialog;
   ok(dlg && dlg.entry.x === db.x && dlg.entry.y === db.y &&
      dlg.exit.x === db.x + db.w && dlg.exit.y === db.y,
@@ -271,7 +322,7 @@ function modules() {
 
     // now move one of the platforms, and both records have to go
     savedModule = null;
-    drop[1].x += 300;
+    live.sort((a, b) => a.x - b.x)[1].x += 300;
     q('modsave').click();
     saveDialogAs('stub-gap');
     setTimeout(() => {
@@ -282,6 +333,12 @@ function modules() {
       finish();
     }, 20);
   }, 20);
+}
+
+// marquee round a world box, which is how the save dialog gets its selection
+function selBox(b) {
+  document.querySelector('#mde-tools button[data-tool="select"]').click();
+  drag(...w2s(b.x - 60, b.y - 60), ...w2s(b.x + b.w + 60, b.y + b.h + 60));
 }
 
 function saveDialogAs(name) {
