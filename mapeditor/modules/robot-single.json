@@ -1,0 +1,87 @@
+{
+ "name": "robot-single",
+ "version": 1,
+ "tags": [
+  "robot",
+  "gun",
+  "ammo"
+ ],
+ "objects": [
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 0,
+   "w": 2400,
+   "h": 1000
+  },
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 1100,
+   "w": 2400,
+   "h": 200
+  },
+  {
+   "kind": "ene",
+   "x": 800,
+   "y": 1101,
+   "w": 0,
+   "h": 0,
+   "typ": "robot",
+   "xx": 0,
+   "yy": 0,
+   "xmin": 800,
+   "xmax": 800,
+   "ymin": 1101,
+   "ymax": 1101
+  }
+ ],
+ "entry": {
+  "x": 0,
+  "y": 1100
+ },
+ "exit": {
+  "x": 2400,
+  "y": 1100
+ },
+ "expect": {
+  "minRung": 6,
+  "tolerance": 2,
+  "independent": true,
+  "why": "The single-robot half of robot-pair, built after the knockback fix to measure the claim 'one robot is a hazard, not a wall' rather than reason about it. Sealed corridor: 100px of headroom against a 120px robot, a roof 1100px up so it cannot be walked over, and the robot pinned (xmin == xmax). Tanking costs one heart, so Energy 2 (rung 5) is the floor. The prediction is 6 rather than 5 because killSprite replaces vx with 43.2px/frame AWAY from the robot, decaying x0.8 -- roughly 150-200px of lost ground that has to be re-run and the hazard band re-crossed inside the 60 remaining invulnerability frames, and a second hit at Energy 2 is death. Terminal run speed is 5*(0.8+0.2*tier): 6px/frame at spd2 covers about 300px in 55 frames against a ~320px requirement, too close to call, and 7px/frame at spd3 covers about 350px. THIS PREDICTION WAS WRITTEN FIRST, then abandoned: the solver said 12 with an exhausted frontier, so the module was rewritten to expect 12 and the finding was recorded as dead. The solver was wrong -- a beamed negative is not a proof, and with the beam off for negatives the answer is 6. The prediction stands as originally made, and 'one robot never gates on the gun' stands with it."
+ },
+ "size": {
+  "w": 2400,
+  "h": 1300
+ },
+ "solve": {
+  "hash": "510b7274f0b9",
+  "settings": {
+   "physicsRev": 3,
+   "recoilBoost": false,
+   "knockbackBoost": false,
+   "stride": 4,
+   "qPos": 6,
+   "qVx": 1,
+   "qVy": 1,
+   "phaseMod": 100,
+   "phaseBucket": 10,
+   "hazardPad": 120,
+   "beamCell": 16,
+   "beamCap": 64,
+   "maxFrames": 9000,
+   "hashBits": 25
+  },
+  "minRung": 12,
+  "combo": {
+   "spdTier": 4,
+   "jmpTier": 4,
+   "doubleJump": true,
+   "energyTier": 2,
+   "ammoTier": 1
+  },
+  "frames": 436,
+  "arena": "mapeditor/maps/module-robot-single.json",
+  "solvedAt": "2026-08-27"
+ }
+}

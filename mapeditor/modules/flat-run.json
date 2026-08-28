@@ -32,9 +32,9 @@
   "h": 200
  },
  "solve": {
-  "hash": "c92214cfbced",
+  "hash": "bb6f6b433975",
   "settings": {
-   "physicsRev": 2,
+   "physicsRev": 3,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,
@@ -59,7 +59,7 @@
   },
   "frames": 240,
   "arena": "mapeditor/maps/module-flat-run.json",
-  "solvedAt": "2026-08-27"
+  "solvedAt": "2026-08-28"
  },
  "handPlay": {
   "hash": "4e2babf907fa",

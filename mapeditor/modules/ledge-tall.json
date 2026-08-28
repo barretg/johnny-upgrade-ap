@@ -39,9 +39,9 @@
   "h": 670
  },
  "solve": {
-  "hash": "ca2c74015465",
+  "hash": "9bb4f867c057",
   "settings": {
-   "physicsRev": 2,
+   "physicsRev": 3,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,

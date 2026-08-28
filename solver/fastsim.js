@@ -15,7 +15,59 @@
 // "time lost dodging a saw" or "time spent riding a lift" is paid for as real elapsed frames.
 
 // The map under test: vanilla unless JU_MAP names another one (see mapsource.js).
-const M = require('./mapsource').load();
+const MAPSOURCE = require('./mapsource');
+const M = MAPSOURCE.load();
+
+/*
+ * How far the world goes.
+ *
+ * Three structures here are grids over world space -- the coin lookup, the dedup key's position
+ * digits, and the beam's cell counter -- and all three were sized from the vanilla level's
+ * extent as literal constants. On any map bigger than vanilla that is not a tuning choice, it is
+ * a wrong answer: a coin outside the grid is filed in a bucket the player's own position never
+ * hashes to, so it can never be collected, and a position outside the key's range clamps into
+ * the edge column, where every state east of it dedups against the same key and the frontier
+ * dies. A generated map is tens of thousands of pixels wide, so everything past x = 3800 came
+ * back "unreachable" with `complete: true` -- an unreachable that looked like a proof.
+ *
+ * The fix is to measure the map. VANILLA KEEPS THE LITERAL CONSTANTS, exactly: the shipped atlas
+ * was computed with these grids and re-deriving them from the vanilla map would change the key
+ * layout and quietly invalidate it (see the vanilla-stays-rev-1 decision). A custom map has no
+ * such history, so it gets its own extent, padded enough that a knockback or a fall off the edge
+ * still lands inside the grid rather than clamping.
+ */
+const VANILLA_EXTENT = { x0: -1800, y0: -800, x1: 3800, y1: 3000 };
+const EXTENT_PAD = 600;
+
+function measureExtent(map) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const see = (x, y) => {
+    if (!isFinite(x) || !isFinite(y)) return;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  };
+  const rect = (o) => { see(o.x, o.y); see(o.x + (o.w || 0), o.y + (o.h || 0)); };
+  (map.plats || []).forEach(rect);
+  (map.spikes || []).forEach(rect);
+  (map.coins || []).forEach((c) => see(c.x, c.y));
+  (map.bombs || []).forEach((b) => see(b.x, b.y));
+  (map.lasers || []).forEach((l) => see(l.x, l.y));
+  for (const list of [map.enes || [], map.platMove || []]) {
+    for (const e of list) { see(e.x, e.y); see(e.xmin, e.ymin); see(e.xmax, e.ymax); }
+  }
+  if (map.colGun) see(map.colGun.x, map.colGun.y);
+  if (map.sprt) see(map.sprt.x, map.sprt.y);
+  if (!isFinite(x0)) return { ...VANILLA_EXTENT };
+  return { x0: x0 - EXTENT_PAD, y0: y0 - EXTENT_PAD, x1: x1 + EXTENT_PAD, y1: y1 + EXTENT_PAD };
+}
+
+const EXTENT = MAPSOURCE.isCustom() ? measureExtent(M) : VANILLA_EXTENT;
+const WX0 = EXTENT.x0;
+const WY0 = EXTENT.y0;
+const WW = EXTENT.x1 - EXTENT.x0;
+const WH = EXTENT.y1 - EXTENT.y0;
 
 const KOL_W = 30;
 const KOL_H = 90;
@@ -28,12 +80,8 @@ const MAX_FALL = 90;
 // ---------------------------------------------------------------------------
 const moveAccel = (t) => (t <= 0 ? 0 : 0.8 + 0.2 * t);
 const jumpImpulse = (t) => (t <= 0 ? null : -(1.1 * t + 12));
-const timerSeconds = (t) => Math.round(t * 6 + 3);
-const framesAllowed = (t) => Math.floor((timerSeconds(t) - 1) * 60);
-function timeTierForFrames(f) {
-  for (let t = 0; t <= 24; t++) if (framesAllowed(t) >= f) return t;
-  return null;
-}
+// See timer.js: one copy of the countdown, bound to no map.
+const { timerSeconds, framesAllowed, timeTierForFrames } = require('./timer');
 
 // ---------------------------------------------------------------------------
 // Static geometry
@@ -288,10 +336,10 @@ COINS.forEach((c, i) => {
 
 // Uniform grid over coin positions so a collection test looks at a couple of buckets.
 const CELL = 128;
-const GX0 = -1800;
-const GY0 = -800;
-const GW = Math.ceil(5600 / CELL);
-const GH = Math.ceil(3800 / CELL);
+const GX0 = WX0;
+const GY0 = WY0;
+const GW = Math.ceil(WW / CELL);
+const GH = Math.ceil(WH / CELL);
 const gridBuckets = new Array(GW * GH);
 for (let i = 0; i < N_COIN; i++) {
   const gx = Math.floor((CX[i] - GX0) / CELL);
@@ -789,8 +837,8 @@ function search(opts = {}) {
   const ZONES = buildHazardZones(o.hazardPad);
   const NZ = ZONES.length / 4;
 
-  const nx = Math.ceil(5600 / o.qPos);
-  const ny = Math.ceil(3800 / o.qPos);
+  const nx = Math.ceil(WW / o.qPos);
+  const ny = Math.ceil(WH / o.qPos);
   // vx normally tops out at 4*spd = 11.2. A damage knockback sets it to +/-43.2, so runs that
   // can survive a hit need a much wider bucket range; runs at 1 heart never see those values and
   // keeping their key narrow is what leaves room for the gun's ammo/kill bits under the 53-bit
@@ -850,6 +898,17 @@ function search(opts = {}) {
     nx * ny * nvx * nvy * 3 * nphase *
     (trackDamage ? nhp * ninv : 1) *
     (hasGun ? nammo * nkill : 1);
+  if (keyBase > Math.pow(2, 53)) {
+    // A wide map buys its position digits out of the same 53 bits as everything else. Past the
+    // budget the packed key silently loses precision, which merges unrelated states -- so say so
+    // rather than return an answer built on collisions.
+    throw new Error(
+      'the dedup key needs ' + keyBase.toExponential(2) + ' values, over the 2^53 budget, before ' +
+      'any crusher is accounted for. This map is ' + Math.round(WW) + 'x' + Math.round(WH) +
+      'px; raise qPos in settings.js (coarser position buckets, which under-reports reachability ' +
+      'rather than over-reporting it) or solve it in pieces.'
+    );
+  }
   const crusherRoom = Math.pow(2, 53) / keyBase;
   let bf = 32;
   const bwFor = (b) => Math.min(8, b);
@@ -885,8 +944,8 @@ function search(opts = {}) {
 
   let lastPhase = 0; // set by keyOf, consumed by beamAdmit
   function keyOf(s, frame) {
-    let qx = Math.round((s[S_X] + 1800) / o.qPos);
-    let qy = Math.round((s[S_Y] + 800) / o.qPos);
+    let qx = Math.round((s[S_X] - WX0) / o.qPos);
+    let qy = Math.round((s[S_Y] - WY0) / o.qPos);
     if (qx < 0) qx = 0;
     else if (qx >= nx) qx = nx - 1;
     if (qy < 0) qy = 0;
@@ -954,11 +1013,11 @@ function search(opts = {}) {
   const visited = new KeySet(o.hashBits);
 
   // Beam bookkeeping: how many states have already been admitted for each (coarse cell, phase).
-  const bw = Math.ceil(5600 / o.beamCell);
-  const bh = Math.ceil(3800 / o.beamCell);
+  const bw = Math.ceil(WW / o.beamCell);
+  const bh = Math.ceil(WH / o.beamCell);
   const beamCount = new Uint16Array(bw * bh * nphase);
   function beamAdmit(s, phase) {
-    let bx = Math.floor((s[S_X] + 1800) / o.beamCell);
+    let bx = Math.floor((s[S_X] - WX0) / o.beamCell);
     let by = Math.floor((s[S_Y] + 800) / o.beamCell);
     if (bx < 0) bx = 0;
     else if (bx >= bw) bx = bw - 1;

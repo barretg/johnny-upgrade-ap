@@ -40,9 +40,9 @@
   "h": 400
  },
  "solve": {
-  "hash": "939445b0a82b",
+  "hash": "f0eee4a00381",
   "settings": {
-   "physicsRev": 2,
+   "physicsRev": 3,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,

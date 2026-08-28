@@ -175,3 +175,71 @@ Two things to carry forward:
 - **A cross-check that never exercises a path is worse than no cross-check**, because it reads
   as coverage. The knockback rules lived in both files, in two different forms, for as long as
   the only test ran at one heart. `test-physics.js` now fails an arm that lands zero hits.
+
+### A single robot is a gun gate, not a hazard to tank
+
+`robot-single` exists because the old finding -- *"one robot never gates on the gun; it is a
+hazard, not a wall, so you tank it at Energy 2"* -- predated the knockback fix and was never a
+module, so nothing re-tested it. It is now measured, and it is **dead**: one pinned robot in a
+sealed 100px corridor grades at **rung 12**, exactly where `robot-pair` does. Rungs 5 through 11
+all fail with exhausted searches. Tanking through costs the heart *and* 150-200px of ground that
+has to be re-run and the hazard re-crossed inside the remaining invulnerability frames, and a
+second hit at Energy 2 is death. The gun with one shot is the cheaper route; the gun-free route
+exists but not below rung 14.
+
+**The generator must treat a single corridor robot as a gun gate**, not as an Energy tax.
+
+### A beamed "no" is not a proof, and it was being treated as one
+
+This one invalidated a finding and then un-invalidated it, so it is worth reading before trusting
+any rung in this directory.
+
+`settings.beamCap` admits at most 64 states per (16px cell, hazard phase) per layer and **throws
+the rest away**. Discarding states can only lose routes, never invent them, which is why the beam
+is safe for the atlas sweep. But the search still reported `complete: true` when its frontier
+emptied -- and "the frontier emptied" stopped meaning "everything was explored" the moment a state
+was discarded. So the rule this whole pipeline rests on, *only an exhausted search may say a rung
+is insufficient*, was not actually being enforced anywhere.
+
+**What it cost.** `robot-single` was built to test the claim that one robot is a hazard rather than
+a wall. The hand-written prediction was **rung 6**: tanking costs a heart and 150-200px of ground,
+which has to be re-run inside the remaining i-frames, so it needs a little Speed but not the gun.
+The solver answered **12** -- the gun -- with an exhausted frontier, so the prediction was
+rewritten to 12 and the finding was recorded as dead. It was not dead. With the beam off for
+negatives the answer is **6**, exactly as predicted. Four rungs, and a wrong conclusion about how
+the generator should treat robots, from a heuristic reported as a proof.
+
+**What changed.** `solve-module.js` now re-runs any negative that had beam rejections with the beam
+effectively off (`beamCap 65535`) before believing it. Positives are never re-run: a route the
+search *found* is a real frame-by-frame trajectory, and no heuristic can fake one. That puts the
+cost only where it belongs -- gap-wide's decisive negative is 4s beamed and 252s unbeamed, and a
+binary search performs only a handful of negatives. `--fast` keeps the old behaviour and marks the
+record `exact: false`, meaning the rung is an **upper bound** rather than an answer.
+
+**Which direction the error ran.** Always toward *harder*: a beamed negative can only claim a rung
+is insufficient when it might not be. For AP logic that is the safe direction -- a check labelled
+harder than it is simply becomes available earlier than the rules expected, which cannot make a
+seed unbeatable. The same reasoning applies to the vanilla atlas, which was swept with the beam
+on: some of its requirements are stricter than the physics demands. It is deliberately not being
+re-swept.
+
+### Corridors must be sealed, and the solver now checks
+
+Building `robot-single` turned up a flaw in every corridor module in this library. The arena is a
+sealed box, but its ceiling is a long way above the module, so a slab whose roof is within jump
+reach of the entry ledge is a **second route from entry to exit that meets none of the module's
+hazards**. `robot-pair` and `spike-corridor` both had a 200px-thick ceiling whose roof sat 300px
+up, which rung 18 (jmp6 + double jump, 328px) walks straight over.
+
+It changed none of their grades -- all three solve at rung 12, well below 18 -- which is exactly
+why it survived: **the library passed while carrying the flaw.** A corridor that deserved a grade
+above its roof rung would have been graded at the roof instead, and that is the too-loose
+direction.
+
+Fixed two ways. The corridor ceilings are now 1000px thick, putting their roofs 1100px above the
+ledges, out of reach at every rung. And `solve-module.js` reports a **roof rung** for any module
+whose overhead slab spans it: the rung from which it can be walked over, which is a hard cap on
+how hard that module can ever grade. A solved rung at or above the roof rung is counted as a
+disagreement, because that grade is a measurement of the roof rather than of the module.
+`tools/test-geometry.js` asserts no module in the library has a roof, and that the check still
+fires on the shape they used to have.

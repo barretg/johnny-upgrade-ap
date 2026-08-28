@@ -4,6 +4,7 @@
 //   node solve-module.js mapeditor/modules/gap-wide-400.json
 //   node solve-module.js --write                  # ...and store the answer in the module file
 //   node solve-module.js --keep-arenas            # leave the arenas in mapeditor/maps/
+//   node solve-module.js --fast                   # trust the beam; rungs become upper bounds
 //
 // This is the cheap half of the "generate from known difficulty" idea. A full atlas sweep is
 // hours times a dozen workers because it answers every combo against the whole map; a module is
@@ -144,6 +145,44 @@ function effectiveMinRung(mod) {
   return { rung: Math.max(hand, solved), source: hand > solved ? 'handPlay' : 'solve', played: true };
 }
 
+/*
+ * Can the module simply be walked OVER?
+ *
+ * The arena is a sealed box, but the box is a long way above the module, so any slab
+ * the player can stand on top of is a second route from entry to exit -- one that
+ * meets none of the module's hazards. That is not hypothetical: every corridor module
+ * in the library was built with a 200px-thick ceiling whose roof sat 300px above the
+ * ledges, which rung 18 (jmp6 plus the double jump, 328px) clears comfortably. It
+ * changed none of their grades only because all three of them solve at rung 12, well
+ * below that. A corridor that deserved a grade ABOVE its roof rung would have been
+ * quietly graded at the roof instead -- a too-loose rule, and the kind that reaches
+ * the generator as an unbeatable seed.
+ *
+ * So this reports the rung at which a module stops being able to grade any higher.
+ * "A roof" is a plat whose top surface is above both ledges and which spans nearly
+ * the whole module, since anything shorter is an island to land on rather than a way
+ * across. `maxRise` over-estimates the jump, so this errs toward CLAIMING a bypass --
+ * a false warning costs a reading, a missed one costs a map.
+ */
+function roofRung(mod, LADDER) {
+  const ledge = Math.min(mod.entry.y, mod.exit.y);
+  const w = (mod.size && mod.size.w) || 0;
+  let best = null;
+  for (const o of mod.objects) {
+    if (o.kind !== 'plat' || o.stomper) continue;       // a falling slab is not a floor
+    if (o.y >= ledge) continue;                         // not above the ledges
+    if (o.x > w * 0.05 || o.x + o.w < w * 0.95) continue; // an island, not a way across
+    const climb = ledge - o.y;
+    for (const r of LADDER.RUNGS) {
+      if (LADDER.maxRise(r) >= climb && (best === null || r.index < best.rung)) {
+        best = { rung: r.index, climb };
+        break;
+      }
+    }
+  }
+  return best;
+}
+
 // ---------------------------------------------------------------------------
 // Child mode: fastsim is already pointed at one arena, so solve it and print the answer.
 // ---------------------------------------------------------------------------
@@ -152,7 +191,33 @@ function effectiveMinRung(mod) {
 // at require() time -- that top-level derivation is where its speed comes from -- so one process
 // can only ever solve one map. Phase 7 will have to unpick that to run in a browser; until then,
 // a child per arena is the honest way to do it.
-function solveLoadedArena() {
+/*
+ * The beam is a heuristic, and a beamed "no" is not a proof.
+ *
+ * `beamCap` admits at most N states per (16px cell, hazard phase) per layer and DROPS the rest.
+ * Dropping states can only lose routes, never invent them, which is why it is safe for the atlas
+ * sweep -- but the search still reports `complete: true` when the frontier empties, because
+ * "frontier empty" and "everything was explored" stopped being the same thing the moment a state
+ * was thrown away. The rule this whole pipeline rests on -- only an exhausted search may say a
+ * rung is insufficient -- was therefore not being enforced.
+ *
+ * It is not hypothetical. robot-single graded at rung 12 with the beam on and an exhausted
+ * frontier; at beamCap 256 the same arena is cleared at rung 8. Four rungs, on a proof.
+ *
+ * So a negative is re-run with the beam effectively off (beamCount is a Uint16Array, so 65535
+ * admits everything) before it is believed. Positives are never re-run: a route the search
+ * FOUND is a real frame-by-frame trajectory and no heuristic can fake one. That keeps the cost
+ * where it belongs -- gap-wide's decisive negative is 4s beamed and 252s unbeamed, and only the
+ * handful of negatives a binary search actually performs pay it.
+ */
+const BEAM_OFF = 65535;
+// Tried in order, and the first CONCLUSIVE answer wins. The middle rung matters: unbeaming a
+// module entirely can blow the visited-set budget and come back "truncated", which proves
+// nothing at all -- crusher-gate does exactly that -- so a partial widening is often the
+// strongest conclusive evidence available.
+const BEAM_LADDER = [1024, BEAM_OFF];
+
+function solveLoadedArena(opts = {}) {
   const F = require('./fastsim');
   const SETTINGS = require('./settings');
   const LADDER = require('./ladder');
@@ -162,26 +227,53 @@ function solveLoadedArena() {
   }
 
   const runs = [];
-  const clears = (rung) => {
+  let exact = true; // did every negative that mattered come from an unbeamed search?
+  const once = (rung, beamCap) => {
     const t0 = Date.now();
     const r = F.search({
       ...LADDER.searchOpts(rung),
       ...SETTINGS,
+      beamCap,
       maxFrames: MODULE_FRAMES,
     });
-    const reached = r.coinFrame[0] >= 0;
-    const complete = !r.stats.truncated && !r.stats.hitFrameLimit;
-    runs.push({
+    const out = {
       rung: rung.index,
-      reached,
-      complete,
-      frames: reached ? r.coinFrame[0] : null,
+      beamCap,
+      reached: r.coinFrame[0] >= 0,
+      complete: !r.stats.truncated && !r.stats.hitFrameLimit,
+      beamRejected: r.stats.beamRejected,
+      frames: r.coinFrame[0] >= 0 ? r.coinFrame[0] : null,
       visited: r.stats.visited,
       seconds: (Date.now() - t0) / 1000,
-    });
-    if (reached) return true;
-    // Only an exhausted search may say "no".
-    return complete ? false : null;
+    };
+    runs.push(out);
+    return out;
+  };
+
+  /*
+   * Escalate until the "no" is worth something.
+   *
+   * A positive at any beam width is final -- the search FOUND a trajectory, and no heuristic can
+   * fake one. A negative is only worth as much as the search that produced it: exhausted with
+   * nothing discarded is a proof, exhausted with states discarded is an upper bound, and
+   * truncated is nothing. So widen the beam while the answer is merely an upper bound, keep the
+   * best one seen, and stop the moment widening starts truncating -- past that point a wider
+   * beam only makes the state space bigger and the answer weaker.
+   */
+  const clears = (rung) => {
+    let bound = null; // a complete-but-beamed "no": real evidence, not a proof
+    for (const cap of [SETTINGS.beamCap, ...(opts.fast ? [] : BEAM_LADDER)]) {
+      const r = once(rung, cap);
+      if (r.reached) return true;
+      if (r.complete && r.beamRejected === 0) return false; // exhausted, nothing discarded
+      if (r.complete) bound = r;                            // exhausted, but the beam had a hand
+      else break;                                           // truncated: wider will only be worse
+    }
+    if (bound) {
+      exact = false;
+      return false;
+    }
+    return null; // nothing conclusive at any width
   };
 
   const res = LADDER.findMinRung(clears);
@@ -194,6 +286,11 @@ function solveLoadedArena() {
     minRung: res.minRung,
     combo: res.minRung === null ? null : LADDER.searchOpts(LADDER.RUNGS[res.minRung]),
     frames,
+    // false => the rung is an UPPER BOUND: some negative was decided by a beamed search that had
+    // thrown states away, so the module may be clearable lower down. Upper bounds are the safe
+    // direction (a check labelled harder than it is comes available early, which cannot make a
+    // seed unbeatable) but they are not what "solved" is supposed to mean.
+    exact,
     probed: res.probed,
     unclearable: !!res.unclearable,
     unknownAt: res.unknownAt === undefined ? null : res.unknownAt,
@@ -221,7 +318,7 @@ function main() {
 
   if (args.flags.arena) {
     // Child. JU_MAP is already set by the parent; requiring fastsim here loads that arena.
-    process.stdout.write(JSON.stringify(solveLoadedArena()));
+    process.stdout.write(JSON.stringify(solveLoadedArena({ fast: !!args.flags.fast })));
     return;
   }
 
@@ -263,7 +360,8 @@ function main() {
     const t0 = Date.now();
     const child = spawnSync(
       process.execPath,
-      ['--max-old-space-size=4000', __filename, '--arena', arenaPath],
+      ['--max-old-space-size=6000', __filename, '--arena', arenaPath]
+        .concat(args.flags.fast ? ['--fast'] : []),
       { cwd: __dirname, env: { ...process.env, JU_MAP: arenaPath }, encoding: 'utf8', maxBuffer: 1 << 24 }
     );
     if (child.status !== 0) {
@@ -274,6 +372,7 @@ function main() {
     const res = JSON.parse(child.stdout);
     const seconds = (Date.now() - t0) / 1000;
 
+    const roof = roofRung(mod, require('./ladder'));
     const expected = mod.expect && typeof mod.expect.minRung === 'number' ? mod.expect.minRung : null;
     // A module whose grade rides on a continuous quantity -- how wide a gap is, how tall a step
     // is -- cannot be predicted to the rung by hand, so it may declare how far off the estimate
@@ -306,6 +405,16 @@ function main() {
     // The hand-play verdict is checked against THIS run's answer, not against the stored one:
     // if the solver has just moved, a verdict recorded below where it now sits has to be caught
     // here rather than surviving in the file as an answer.
+    // A grade at or above the roof rung is not a grade, it is the roof.
+    let roofNote = '';
+    if (roof) {
+      roofNote = `  [roof ${roof.climb}px up is reachable from rung ${roof.rung}` +
+        (res.minRung !== null && res.minRung >= roof.rung
+          ? ' -- AT OR BELOW THE SOLVED RUNG, so this module is graded on walking over it'
+          : ', which caps how hard this module can ever grade') + ']';
+      if (res.minRung !== null && res.minRung >= roof.rung) disagreements++;
+    }
+
     let handNote = '';
     if (mod.handPlay && typeof mod.handPlay.minRung === 'number') {
       const hand = mod.handPlay.minRung;
@@ -327,7 +436,9 @@ function main() {
       `${String(mod.name).padEnd(22)} minRung=${res.minRung === null ? '-' : res.minRung}` +
         ` expect=${expected === null ? '-' : expected}` +
         ` frames=${res.frames === null ? '-' : res.frames}` +
-        ` probes=${res.probed.length} ${seconds.toFixed(1)}s  ${verdict}${handNote}`
+        ` probes=${res.probed.length} ${seconds.toFixed(1)}s  ${verdict}` +
+        (res.exact === false ? '  [UPPER BOUND: a beamed negative decided it; re-run without ' +
+          '--fast to settle]' : '') + `${handNote}${roofNote}`
     );
 
     if (args.flags.write && res.minRung !== null) {
@@ -336,6 +447,8 @@ function main() {
         hash: mod.hash,
         settings: SETTINGS,
         minRung: res.minRung,
+        // Absent means exact. Present and false means the rung is an upper bound -- see BEAM_OFF.
+        ...(res.exact === false ? { exact: false } : {}),
         combo: res.combo,
         frames: res.frames,
         arena: path.relative(ROOT, arenaPath).replace(/\\/g, '/'),
@@ -376,6 +489,7 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
+  roofRung,
   readModule,
   moduleHash,
   geometryHash,

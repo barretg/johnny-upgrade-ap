@@ -162,3 +162,50 @@ eq(riseOk, true, 'jumpRise matches a frame-by-frame run of the same physics');
 const r13 = L.RUNGS[13], r14 = L.RUNGS[14];
 eq([2 * R.jumpRise(r13.jump) >= 270, 2 * R.jumpRise(r14.jump) >= 270], [false, true],
    'the rung 13/14 boundary at ledge-tall\'s 270px step comes out where the solver put it');
+
+/*
+ * ladder.js carries the same three functions, because solve-module.js needs them to
+ * decide whether a module can be walked over and cannot require physics.js without
+ * binding itself to one map. Two copies, both held against the original here.
+ */
+let ladderOk = true;
+for (let t = 0; t <= 10; t++) {
+  const want = PH.jumpImpulse(t);
+  if (L.moveAccel(t) !== PH.moveAccel(t)) ladderOk = false;
+  if (want === null ? L.jumpImpulse(t) !== null : L.jumpImpulse(t) !== -want) ladderOk = false;
+  if (t >= 1 && Math.abs(L.jumpRise(t) - riseByLoop(t)) > 1e-9) ladderOk = false;
+}
+eq(ladderOk, true, 'solver/ladder.js\'s copy of the ability model matches physics.js too');
+eq([L.maxRise(L.RUNGS[8]) === 2 * L.jumpRise(L.RUNGS[8].jump),
+    L.maxRise(L.RUNGS[7]) === L.jumpRise(L.RUNGS[7].jump)], [true, true],
+   'maxRise doubles exactly where the double jump arrives (rung 8) and not before');
+
+// ---------------------------------------------------------------- the roof check
+/*
+ * A module's arena is a sealed box, but the box is far above the module, so a slab
+ * the player can stand on top of is a second route from entry to exit that meets
+ * none of the module's hazards. Every corridor module in the library used to have
+ * one, 300px up, walkable from rung 18. It changed no grade only because all of them
+ * solve at 12 -- so the library passed while carrying the flaw, which is why the
+ * check is here and not left to the next author to notice.
+ */
+const SM = require('../../solver/solve-module.js');
+const roofed = fs.readdirSync(MODDIR).filter((f) => f.endsWith('.json'))
+  .map((f) => [f, SM.roofRung(JSON.parse(fs.readFileSync(path.join(MODDIR, f), 'utf8')), L)])
+  .filter(([, r]) => r);
+eq(roofed.map(([f, r]) => f + ' @ rung ' + r.rung), [],
+   'no module in the library can be walked over instead of through');
+
+// and the check itself really fires -- a corridor with a 200px ceiling 300px up is
+// exactly the shape the library shipped with, and rung 18 clears 300px
+const unsealed = {
+  size: { w: 2400, h: 500 }, entry: { x: 0, y: 300 }, exit: { x: 2400, y: 300 },
+  objects: [{ kind: 'plat', x: 0, y: 0, w: 2400, h: 200 },
+            { kind: 'plat', x: 0, y: 300, w: 2400, h: 200 }],
+};
+eq(SM.roofRung(unsealed, L), { rung: 18, climb: 300 },
+   'and it catches the shape the corridors used to have');
+// a slab that does not span the module is somewhere to land, not a way across
+const island = JSON.parse(JSON.stringify(unsealed));
+island.objects[0].w = 400;
+eq(SM.roofRung(island, L), null, 'an island overhead is not a bypass');

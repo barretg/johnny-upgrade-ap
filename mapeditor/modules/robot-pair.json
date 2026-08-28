@@ -12,19 +12,19 @@
    "x": 0,
    "y": 0,
    "w": 2400,
-   "h": 200
+   "h": 1000
   },
   {
    "kind": "plat",
    "x": 0,
-   "y": 300,
+   "y": 1100,
    "w": 2400,
    "h": 200
   },
   {
    "kind": "ene",
    "x": 800,
-   "y": 301,
+   "y": 1101,
    "w": 0,
    "h": 0,
    "typ": "robot",
@@ -32,13 +32,13 @@
    "yy": 0,
    "xmin": 800,
    "xmax": 800,
-   "ymin": 301,
-   "ymax": 301
+   "ymin": 1101,
+   "ymax": 1101
   },
   {
    "kind": "ene",
    "x": 1500,
-   "y": 301,
+   "y": 1101,
    "w": 0,
    "h": 0,
    "typ": "robot",
@@ -46,17 +46,17 @@
    "yy": 0,
    "xmin": 1500,
    "xmax": 1500,
-   "ymin": 301,
-   "ymax": 301
+   "ymin": 1101,
+   "ymax": 1101
   }
  ],
  "entry": {
   "x": 0,
-  "y": 300
+  "y": 1100
  },
  "exit": {
   "x": 2400,
-  "y": 300
+  "y": 1100
  },
  "expect": {
   "minRung": 12,
@@ -65,12 +65,12 @@
  },
  "size": {
   "w": 2400,
-  "h": 500
+  "h": 1300
  },
  "solve": {
-  "hash": "dd70dea71398",
+  "hash": "3b448c2d0afd",
   "settings": {
-   "physicsRev": 2,
+   "physicsRev": 3,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,
@@ -96,11 +96,5 @@
   "frames": 436,
   "arena": "mapeditor/maps/module-robot-pair.json",
   "solvedAt": "2026-08-27"
- },
- "handPlay": {
-  "hash": "42c427295058",
-  "playedAt": "2026-08-27",
-  "minRung": 12,
-  "why": "Played at rung 12. Shooting both robots is the route; the two are far enough apart that tanking through is not on offer."
  }
 }

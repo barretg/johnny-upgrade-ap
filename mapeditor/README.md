@@ -508,6 +508,68 @@ is absent, plus an **export** link per module -- nothing in a browser can *solve
 module, so one saved in the game page stays unsolved until its file reaches
 `solver/solve-module.js`.
 
+## Generating a whole map from the library
+
+`tools/generate-map.js` assembles the module library into a complete, playable level whose
+difficulty is known **by construction** rather than measured afterwards. Solving a candidate map
+is unaffordable -- a full atlas sweep is hours times a dozen workers -- so nothing here is solved:
+every obstacle in the output is a module that was already solved against `solver/ladder.js`, and
+the layout is arranged so that the rung a check needs is a fact about the geometry.
+
+```
+node mapeditor/tools/generate-map.js --list
+node mapeditor/tools/generate-map.js --seed 1 --checks 6 --out mapeditor/maps/generated-1.json
+```
+
+`--list` is the first thing to run: it prints what the library can gate and, more usefully, what
+it cannot. A rung with no module is a rung with no band, which makes the map smaller rather than
+wrong, and the list is the authoring queue.
+
+Left to right: a start corridor, then one band per gateable rung in ascending order, then the boss
+room. A band is `=gate slot= --corridor-- =interior slot= --corridor--`, where the gate is a module
+whose rung IS the band's and interiors are any module at or below it.
+
+Three properties carry the difficulty claim, and each is geometry rather than intent:
+
+1. **A gate is a hole in a wall.** Every module sits in its own sealed box -- the same box
+   `solver/arena.js` solved it in, ledge for ledge, with the same lethal pit and the same headroom
+   -- and the only openings are two 200px doorways at ledge height. There is no over, no under and
+   no around, so being east of a gate means having crossed it. `tools/test-generate.js` asserts the
+   box against `buildArena` platform for platform, and asserts that each side wall is exactly two
+   pieces with one doorway between them.
+2. **Bands ascend.** Band k is east of every lower band, so its checks inherit every gate below.
+   The requirement for a check is its own band's rung, not a union to be computed.
+3. **Nothing outside a module is dangerous.** Corridors are flat sealed tubes at walkway height.
+   A corridor coin is free to whoever got into the corridor, which is the point -- it inherits the
+   gate's requirement and adds nothing of its own.
+
+**The clock is the binding constraint, not the geometry.** Johnny replays one map per round against
+a countdown that tops out at 147 seconds (`solver/timer.js`), so the layout is *tried* rather than
+computed: lay it out, price the walk to the far end, and if a band wants more time than the game
+sells, throw it away and lay it out tighter. Compactness is spent where it hurts least -- interior
+modules first, since the gate is what grades the band, then corridor length, which is only walking.
+The estimate is deliberately pessimistic (module frames come from the solver's run at that module's
+*minimum* rung, corridors are walked at terminal speed with no credit for acceleration, and a slack
+factor covers the rest): over-estimating buys a bigger timer than needed, under-estimating puts a
+check behind a clock that cannot reach it.
+
+**The display case.** The coverage assertion requires the map to contain one of every obstacle the
+SDK can make, so that a generated level exercises every path through `iniLevel()` rather than only
+the ones the library happens to use. But an obstacle dropped on the spine is an *ungraded* obstacle,
+which is the one thing this pipeline exists to prevent -- so the missing kinds go in a sealed box
+under the start corridor, created and ticked by the game and reachable by nobody. It holds only what
+the map lacks: a conformance crusher beside a band already gated by a crusher module is not free,
+because every crusher costs the solver's dedup key a factor of three on a map this wide.
+
+**Output** is the map plus a `.logic.json` sidecar naming each check, its band, its rung and the
+time tier it needs. The sidecar is what Phase 6's `verify-map.js` checks and what the apworld
+eventually consumes; it stays beside the map rather than inside it, because `iniLevel` reads the map
+and has no business carrying requirements around.
+
+**Nothing the generator emits is verified.** It lays out something worth verifying and refuses to
+emit one it can already tell is wrong. Whether a check really does first become reachable at the
+rung it was laid out for is `solver/verify-map.js`'s question.
+
 ## Runtime architecture
 
 Two packages, one-way dependency. `mapkit` must not know Archipelago exists, and
@@ -572,6 +634,8 @@ Zero-dependency Node, no build step.
   being clipped.
 - `tools/build-editor-userscript.js [--out <path>] [--maps <dir>]` -- bundle the
   editor and the runtime into one Tampermonkey script.
+- `tools/generate-map.js [--list] [--seed N] [--checks N] [--out <path>]` -- build a
+  whole level out of the solved module library. See above.
 
 ## Tests
 
@@ -579,6 +643,7 @@ Three, in rising order of how much they prove and how much they cost.
 
 ```
 node mapeditor/tools/test-geometry.js        # pure geometry, no browser
+node mapeditor/tools/test-generate.js        # the generated map's structural claims
 msedge --headless=new --dump-dom mapeditor/tools/uicheck.html   # the editor UI
 node mapeditor/tools/e2e/server.js           # the shipped userscript + the game
 ```
@@ -593,6 +658,14 @@ node mapeditor/tools/e2e/server.js           # the shipped userscript + the game
   identical derived entry/exit. A change to the object model that quietly alters
   what a module serialises to fails here, rather than by silently dropping a rung
   that a person spent a play session establishing.
+- **test-generate.js** asserts the three properties the generated map's difficulty rests
+  on, as facts about the object list: a slot is `buildArena`'s box platform for
+  platform with two doorways cut in it, bands ascend in both rung and space, every
+  check carries its own band's rung and lies inside it, every band fits the clock,
+  the same seed gives the same map byte for byte, and the coverage assertion
+  notices a missing obstacle kind. What it deliberately does not check is whether
+  the rungs are *right* -- that is `solver/verify-map.js` in Phase 6, and these
+  exist so that when it disagrees, the layout is not what is in question.
 - **uicheck.html** drives the editor itself with synthetic mouse events -- handle
   hit-testing, beam dragging, clamp switching, group rotate/resize, group
   snapping, the coordinate readout, and the module drop/save round trip with its

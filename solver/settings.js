@@ -33,7 +33,16 @@ module.exports = {
   // so a tanked hit cost a heart and no ground. Vanilla always applies the shove. Every combo
   // that can survive a hit is affected; measured on two 5-heart combos it moved reachable coins
   // by +92 and by -32/+14, i.e. in both directions. Atlases built at rev 1 are not comparable.
-  physicsRev: 2,
+  //
+  // 3 (2026-08-27): the coin lookup grid, the dedup key's position digits and the beam's cell
+  // counter were all sized from the VANILLA level's extent as literal constants. On a bigger map
+  // that is a wrong answer, not a tuning choice: a coin outside the grid hashes to a bucket the
+  // player never visits, and a position outside the key's range clamps into the edge column so
+  // every state past it dedups away and the frontier dies. A generated map reported everything
+  // east of x = 3800 as unreachable, with `complete: true`. fastsim now measures a custom map's
+  // extent; VANILLA STILL USES THE LITERAL CONSTANTS and is unchanged frame for frame, so this
+  // rev only moves custom maps -- every module solve record among them.
+  physicsRev: 3,
 
   // --- human-execution knobs -------------------------------------------------------------
   // These decide what counts as a route a person could actually pull off, as opposed to one that

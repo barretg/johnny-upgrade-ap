@@ -1,0 +1,418 @@
+{
+ "map": "generated-1",
+ "seed": 1,
+ "generatedBy": "mapeditor/tools/generate-map.js",
+ "settings": {
+  "physicsRev": 3,
+  "recoilBoost": false,
+  "knockbackBoost": false,
+  "stride": 4,
+  "qPos": 6,
+  "qVx": 1,
+  "qVy": 1,
+  "phaseMod": 100,
+  "phaseBucket": 10,
+  "hazardPad": 120,
+  "beamCell": 16,
+  "beamCap": 64,
+  "maxFrames": 9000,
+  "hashBits": 25
+ },
+ "bands": [
+  {
+   "rung": 1,
+   "x0": 2400,
+   "x1": 7200,
+   "gate": "flat-run",
+   "checks": 6,
+   "timeTier": 4,
+   "framesEstimate": 1408
+  },
+  {
+   "rung": 8,
+   "x0": 7200,
+   "x1": 12900,
+   "gate": "gap-double-jump",
+   "checks": 6,
+   "timeTier": 7,
+   "framesEstimate": 2378
+  },
+  {
+   "rung": 12,
+   "x0": 12900,
+   "x1": 19500,
+   "gate": "robot-single",
+   "checks": 6,
+   "timeTier": 10,
+   "framesEstimate": 3533
+  },
+  {
+   "rung": 14,
+   "x0": 19500,
+   "x1": 25000,
+   "gate": "ledge-tall",
+   "checks": 6,
+   "timeTier": 12,
+   "framesEstimate": 4260
+  },
+  {
+   "rung": 17,
+   "x0": 25000,
+   "x1": 31600,
+   "gate": "crusher-gate",
+   "checks": 6,
+   "timeTier": 14,
+   "framesEstimate": 5101
+  },
+  {
+   "rung": 20,
+   "x0": 31600,
+   "x1": 37665,
+   "gate": "gap-wide",
+   "checks": 6,
+   "timeTier": 16,
+   "framesEstimate": 5743
+  }
+ ],
+ "checks": [
+  {
+   "name": "Find the Gun",
+   "kind": "colGun",
+   "x": 1500,
+   "y": -60,
+   "band": null,
+   "rung": 0,
+   "timeTier": 0
+  },
+  {
+   "name": "flat-run cleared",
+   "kind": "coin",
+   "module": "flat-run",
+   "x": 3650,
+   "y": -45,
+   "band": 1,
+   "rung": 1,
+   "timeTier": 4
+  },
+  {
+   "name": "Rung 1 corridor coin 1",
+   "kind": "coin",
+   "x": 4600,
+   "y": -45,
+   "band": 1,
+   "rung": 1,
+   "timeTier": 4
+  },
+  {
+   "name": "Rung 1 corridor coin 2",
+   "kind": "coin",
+   "x": 5100,
+   "y": -45,
+   "band": 1,
+   "rung": 1,
+   "timeTier": 4
+  },
+  {
+   "name": "Rung 1 corridor coin 3",
+   "kind": "coin",
+   "x": 5600,
+   "y": -45,
+   "band": 1,
+   "rung": 1,
+   "timeTier": 4
+  },
+  {
+   "name": "Rung 1 corridor coin 4",
+   "kind": "coin",
+   "x": 6100,
+   "y": -45,
+   "band": 1,
+   "rung": 1,
+   "timeTier": 4
+  },
+  {
+   "name": "Rung 1 corridor coin 5",
+   "kind": "coin",
+   "x": 6600,
+   "y": -45,
+   "band": 1,
+   "rung": 1,
+   "timeTier": 4
+  },
+  {
+   "name": "gap-double-jump cleared",
+   "kind": "coin",
+   "module": "gap-double-jump",
+   "x": 9350,
+   "y": -45,
+   "band": 8,
+   "rung": 8,
+   "timeTier": 7
+  },
+  {
+   "name": "Rung 8 corridor coin 1",
+   "kind": "coin",
+   "x": 10300,
+   "y": -45,
+   "band": 8,
+   "rung": 8,
+   "timeTier": 7
+  },
+  {
+   "name": "Rung 8 corridor coin 2",
+   "kind": "coin",
+   "x": 10800,
+   "y": -45,
+   "band": 8,
+   "rung": 8,
+   "timeTier": 7
+  },
+  {
+   "name": "Rung 8 corridor coin 3",
+   "kind": "coin",
+   "x": 11300,
+   "y": -45,
+   "band": 8,
+   "rung": 8,
+   "timeTier": 7
+  },
+  {
+   "name": "Rung 8 corridor coin 4",
+   "kind": "coin",
+   "x": 11800,
+   "y": -45,
+   "band": 8,
+   "rung": 8,
+   "timeTier": 7
+  },
+  {
+   "name": "Rung 8 corridor coin 5",
+   "kind": "coin",
+   "x": 12300,
+   "y": -45,
+   "band": 8,
+   "rung": 8,
+   "timeTier": 7
+  },
+  {
+   "name": "robot-single cleared",
+   "kind": "coin",
+   "module": "robot-single",
+   "x": 15950,
+   "y": -45,
+   "band": 12,
+   "rung": 12,
+   "timeTier": 10
+  },
+  {
+   "name": "Rung 12 corridor coin 1",
+   "kind": "coin",
+   "x": 16900,
+   "y": -45,
+   "band": 12,
+   "rung": 12,
+   "timeTier": 10
+  },
+  {
+   "name": "Rung 12 corridor coin 2",
+   "kind": "coin",
+   "x": 17400,
+   "y": -45,
+   "band": 12,
+   "rung": 12,
+   "timeTier": 10
+  },
+  {
+   "name": "Rung 12 corridor coin 3",
+   "kind": "coin",
+   "x": 17900,
+   "y": -45,
+   "band": 12,
+   "rung": 12,
+   "timeTier": 10
+  },
+  {
+   "name": "Rung 12 corridor coin 4",
+   "kind": "coin",
+   "x": 18400,
+   "y": -45,
+   "band": 12,
+   "rung": 12,
+   "timeTier": 10
+  },
+  {
+   "name": "Rung 12 corridor coin 5",
+   "kind": "coin",
+   "x": 18900,
+   "y": -45,
+   "band": 12,
+   "rung": 12,
+   "timeTier": 10
+  },
+  {
+   "name": "ledge-tall cleared",
+   "kind": "coin",
+   "module": "ledge-tall",
+   "x": 21450,
+   "y": -315,
+   "band": 14,
+   "rung": 14,
+   "timeTier": 12
+  },
+  {
+   "name": "Rung 14 corridor coin 1",
+   "kind": "coin",
+   "x": 22400,
+   "y": -315,
+   "band": 14,
+   "rung": 14,
+   "timeTier": 12
+  },
+  {
+   "name": "Rung 14 corridor coin 2",
+   "kind": "coin",
+   "x": 22900,
+   "y": -315,
+   "band": 14,
+   "rung": 14,
+   "timeTier": 12
+  },
+  {
+   "name": "Rung 14 corridor coin 3",
+   "kind": "coin",
+   "x": 23400,
+   "y": -315,
+   "band": 14,
+   "rung": 14,
+   "timeTier": 12
+  },
+  {
+   "name": "Rung 14 corridor coin 4",
+   "kind": "coin",
+   "x": 23900,
+   "y": -315,
+   "band": 14,
+   "rung": 14,
+   "timeTier": 12
+  },
+  {
+   "name": "Rung 14 corridor coin 5",
+   "kind": "coin",
+   "x": 24400,
+   "y": -315,
+   "band": 14,
+   "rung": 14,
+   "timeTier": 12
+  },
+  {
+   "name": "crusher-gate cleared",
+   "kind": "coin",
+   "module": "crusher-gate",
+   "x": 28050,
+   "y": -315,
+   "band": 17,
+   "rung": 17,
+   "timeTier": 14
+  },
+  {
+   "name": "Rung 17 corridor coin 1",
+   "kind": "coin",
+   "x": 29000,
+   "y": -315,
+   "band": 17,
+   "rung": 17,
+   "timeTier": 14
+  },
+  {
+   "name": "Rung 17 corridor coin 2",
+   "kind": "coin",
+   "x": 29500,
+   "y": -315,
+   "band": 17,
+   "rung": 17,
+   "timeTier": 14
+  },
+  {
+   "name": "Rung 17 corridor coin 3",
+   "kind": "coin",
+   "x": 30000,
+   "y": -315,
+   "band": 17,
+   "rung": 17,
+   "timeTier": 14
+  },
+  {
+   "name": "Rung 17 corridor coin 4",
+   "kind": "coin",
+   "x": 30500,
+   "y": -315,
+   "band": 17,
+   "rung": 17,
+   "timeTier": 14
+  },
+  {
+   "name": "Rung 17 corridor coin 5",
+   "kind": "coin",
+   "x": 31000,
+   "y": -315,
+   "band": 17,
+   "rung": 17,
+   "timeTier": 14
+  },
+  {
+   "name": "gap-wide cleared",
+   "kind": "coin",
+   "module": "gap-wide",
+   "x": 34115,
+   "y": -315,
+   "band": 20,
+   "rung": 20,
+   "timeTier": 16
+  },
+  {
+   "name": "Rung 20 corridor coin 1",
+   "kind": "coin",
+   "x": 35065,
+   "y": -315,
+   "band": 20,
+   "rung": 20,
+   "timeTier": 16
+  },
+  {
+   "name": "Rung 20 corridor coin 2",
+   "kind": "coin",
+   "x": 35565,
+   "y": -315,
+   "band": 20,
+   "rung": 20,
+   "timeTier": 16
+  },
+  {
+   "name": "Rung 20 corridor coin 3",
+   "kind": "coin",
+   "x": 36065,
+   "y": -315,
+   "band": 20,
+   "rung": 20,
+   "timeTier": 16
+  },
+  {
+   "name": "Rung 20 corridor coin 4",
+   "kind": "coin",
+   "x": 36565,
+   "y": -315,
+   "band": 20,
+   "rung": 20,
+   "timeTier": 16
+  },
+  {
+   "name": "Rung 20 corridor coin 5",
+   "kind": "coin",
+   "x": 37065,
+   "y": -315,
+   "band": 20,
+   "rung": 20,
+   "timeTier": 16
+  }
+ ]
+}

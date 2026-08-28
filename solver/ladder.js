@@ -137,5 +137,37 @@ function findMinRung(clears) {
   return { minRung: lo, probed };
 }
 
-return { RUNGS, N_RUNGS, TRACKS, POOL, searchOpts, label, findMinRung };
+/*
+ * What a rung MEANS in world pixels.
+ *
+ * Transcribed from physics.js -- `moveAccel`, `jumpImpulse`, and the frame order of
+ * `controls()` then `vy += GRAVITY; y += vy` -- rather than imported, because
+ * physics.js derives its world from JU_MAP at require() time and so binds whatever
+ * process touches it to one map. This file is pure arithmetic and is safe to load
+ * anywhere: the editor's rung reference and solve-module.js's roof check both read
+ * it. `tools/test-geometry.js` holds all three against the real functions.
+ */
+const moveAccel = (spdTier) => (spdTier <= 0 ? 0 : 0.8 + 0.2 * spdTier);
+const jumpImpulse = (jmpTier) => (jmpTier <= 0 ? null : 1.1 * jmpTier + 12);
+
+// The jump sets vy = -J and gravity is added BEFORE the move, so the first frame
+// rises J-1. Summing to the apex gives n*J - n(n+1)/2 for n = floor(J).
+function jumpRise(jmpTier) {
+  const J = jumpImpulse(jmpTier);
+  if (J === null) return 0;
+  const n = Math.floor(J);
+  return n * J - (n * (n + 1)) / 2;
+}
+
+/*
+ * The highest a rung can get above the surface it stands on -- one jump, doubled if
+ * it has the double jump. It is an OVER-estimate: it assumes the second jump is
+ * spent exactly at the first apex and that nothing is in the way. Over-estimating is
+ * the safe direction for the only thing it is used for, deciding whether a surface
+ * is out of reach, since it can only ever say "reachable" too eagerly.
+ */
+const maxRise = (rung) => jumpRise(rung.jump) * (rung.doubleJump ? 2 : 1);
+
+return { RUNGS, N_RUNGS, TRACKS, POOL, searchOpts, label, findMinRung,
+         moveAccel, jumpImpulse, jumpRise, maxRise };
 }));

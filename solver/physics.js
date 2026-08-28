@@ -24,18 +24,10 @@ function moveAccel(spdTier) {
 function jumpImpulse(jmpTier) {
   return jmpTier <= 0 ? null : -(1.1 * jmpTier + 12);
 }
-function timerSeconds(timTier) {
-  return Math.round(timTier * 6 + 3);
-}
-// clockCode subtracts 1/60 per frame and kills at tim < 1, so a run survives F frames iff
-// 6*T + 3 - F/60 >= 1.
-function framesAllowed(timTier) {
-  return Math.floor((timerSeconds(timTier) - 1) * 60);
-}
-function timeTierForFrames(frames) {
-  for (let t = 0; t <= 24; t++) if (framesAllowed(t) >= frames) return t;
-  return null;
-}
+// The countdown lives in timer.js, which binds to no map, so the map generator can price a route
+// in seconds without dragging a simulator (and its JU_MAP) in behind it. Re-exported here because
+// callers have always found it on this module.
+const { timerSeconds, framesAllowed, timeTierForFrames } = require('./timer');
 
 // ---------------------------------------------------------------------------
 // Static world geometry (never changes during a run)

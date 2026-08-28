@@ -44,9 +44,9 @@
   "h": 2960
  },
  "solve": {
-  "hash": "1102ca6e690f",
+  "hash": "7a4738f50976",
   "settings": {
-   "physicsRev": 2,
+   "physicsRev": 3,
    "recoilBoost": false,
    "knockbackBoost": false,
    "stride": 4,
@@ -62,6 +62,7 @@
    "hashBits": 25
   },
   "minRung": 17,
+  "exact": false,
   "combo": {
    "spdTier": 6,
    "jmpTier": 5,
@@ -71,7 +72,7 @@
   },
   "frames": 348,
   "arena": "mapeditor/maps/module-crusher-gate.json",
-  "solvedAt": "2026-08-27"
+  "solvedAt": "2026-08-28"
  },
  "handPlay": {
   "hash": "a465b6889746",
