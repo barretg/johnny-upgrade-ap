@@ -339,6 +339,44 @@ wrong in the level.
   round markers sit on the canvas. They are hit-tested *before* every other
   handle, because they routinely land exactly on a platform corner.
 
+### Paint mode
+
+A room is thirty platforms, and thirty platforms used to be thirty clicks, thirty
+drags and thirty squints at the coordinate readout. **Paint** (the toolbar button,
+or `p`) turns a drag into a stroke: every grid cell the cursor enters gets one
+stamp of the armed tool.
+
+Three rules, and each is what makes a stroke usable rather than work to clean up
+afterwards:
+
+- **A stamp fills its cell exactly.** Not "snapped to the nearest grid line" --
+  that still lets two stamps sit a cell apart with a hairline between them, and a
+  hairline in a platform run is a hole Johnny falls through.
+- **A cell is never stamped twice.** Dragging back over your own stroke is free,
+  and the shaky part of a fast drag does not stack forty platforms in one place.
+- **The whole stroke is one undo.** A stroke that undoes cell by cell is worse
+  than no undo at all.
+
+Paint needs a grid, since a cell is the unit it works in; picking `free` turns it
+off rather than guessing a size. It is a **mode**: while it is on the canvas
+paints and does nothing else, because a finished stroke leaves its own group
+handles lying exactly where the next stroke starts, and stretching the last run of
+platforms across the room is not a plausible thing to have meant.
+
+Paintable kinds are the ones a room is built out of -- platforms, textures,
+spikes, coins, enemies, bombs, moving platforms. Singletons (spawn, gun pickup,
+boss gate, boss arena) are excluded because a stroke of them is one object being
+dragged about; lasers because a beam squeezed into one cell is not a laser; camera
+areas and doors because they are placed against the shape of a room, one at a
+time.
+
+**Textures size themselves to one grid cell**, painted or clicked, letterboxed and
+never stretched: scaled by the tighter axis and centred in the remainder, and never
+scaled *up* past 1:1. The tiles are cut from the game's own artwork at their own
+aspect ratios, so a stretched tile is the difference between a wall that looks like
+the game and a wall that looks like the game in a funhouse mirror. Off the grid
+they land at their native pixel size, which is what `free` means everywhere else.
+
 ## The module library
 
 A **module** is a piece of level with a known difficulty: geometry, an entry
@@ -402,6 +440,44 @@ sha1 in a browser. Two consequences worth knowing:
 - A no-op re-save is byte-identical to the file on disk, matching
   `solve-module.js --write`'s own formatting, so a real diff is always a real
   change.
+
+### The work queue
+
+Three states need a person, and until they were counted in the panel the only way
+to find out was to open eight JSON files and read them -- which is how an upper
+bound sat unnoticed in the library for a whole phase. The chips above the list
+count each one and filter to it on click:
+
+| chip | what it means |
+|---|---|
+| **unsolved** | no difficulty at all. `generate-map.js` refuses these outright. One click runs the solver. |
+| **conflict** | the hand-play verdict is *below* the solved rung: a person cleared what the simulator says is impossible. That is a physics bug, not a difficulty correction, and `solve-module.js` refuses to write it down. One click re-solves, which is usually the right move -- the cause is normally that the simulator has been corrected since. |
+| **upper bound** | solved, but the negative that decided the rung came from a beamed search that had thrown states away, so the module may be clearable lower down. Badged `rung ≤N` rather than `rung N`, because it is a ceiling and not an answer. Safe to build with -- a check labelled too hard comes available early, which cannot make a seed unbeatable -- and a hand-play settles it. |
+| **unplayed** | solved but never played by a person. |
+
+**play all →** hand-tests everything waiting, easiest rung first, without coming
+back to the panel between modules. See below.
+
+### Editing a module on its own
+
+A module used to be authored by dropping it into some map, editing it there,
+marqueeing it back up and saving it over itself. Four steps, three of which are
+chances to get the bounding box wrong: catch one platform too few and the module
+silently loses a wall, one too many and it swallows a piece of whatever map it was
+borrowing. Either way the geometry hash moves, the solve record and the hand-play
+verdict are dropped, and the only sign is a badge going grey.
+
+**edit** on a module row opens it on its own instead. The canvas holds the module
+and nothing else, at the origin, so what is on screen matches the numbers in the
+file. The save dialog is already open and already filled in with the module's
+name, tags, entry and exit, and saving takes **everything on the canvas** -- there
+is no selection to get wrong, because there is nothing else there to select.
+Anything drawn afterwards is part of the module.
+
+It is deliberately *not* the solved arena. `solver/arena.js`'s box is what a module
+is graded in and `solve-module.js` builds it fresh every time; editing inside a copy
+of it would put its walls and ledges on the canvas as objects, and the first save
+would swallow them. The arena stays where it belongs, behind the hand-test button.
 
 ### Solving on save
 
@@ -474,6 +550,24 @@ hash so correcting the simulator cannot wipe it.
 
 None of this exists in the userscript: there is no server to record against, so a
 module played on coolmathgames has to be recorded from the dev server.
+
+#### Playing the whole queue in one sitting
+
+Hand-playing is the expensive half of grading a module -- it is a person's time --
+and the old loop spent a chunk of it walking back to the panel to find the next
+module. **play all →** hands the play page the rest of the queue, and the play page
+walks it: record a verdict, press *next*, and the following module's arena is built
+and loaded without the editor being visited at all. There is a *skip* alongside it
+for a module you cannot make progress on today; skipping records nothing, so it
+stays in the queue.
+
+Names travel in the queue, **not rungs**. Each module's rung is read from the
+library at the moment it is loaded, because recording a verdict can *raise* a
+module's effective rung, and a queue that had pinned the old number would play the
+next module at a rung the library no longer agrees with.
+
+Easiest rung first, which is the right way round for a person: the early ones warm
+up the hands and the hard ones arrive when the module set is already familiar.
 
 ### The rung reference
 
@@ -636,6 +730,10 @@ Zero-dependency Node, no build step.
   editor and the runtime into one Tampermonkey script.
 - `tools/generate-map.js [--list] [--seed N] [--checks N] [--out <path>]` -- build a
   whole level out of the solved module library. See above.
+- `../solver/verify-map.js <map> [--quick]` -- run a generated map through the
+  simulator and check that each band gates what its `.logic.json` sidecar says it
+  gates. Not in this folder, but it is the thing to run after generating. See
+  below.
 
 ## Tests
 
@@ -645,8 +743,15 @@ Three, in rising order of how much they prove and how much they cost.
 node mapeditor/tools/test-geometry.js        # pure geometry, no browser
 node mapeditor/tools/test-generate.js        # the generated map's structural claims
 msedge --headless=new --dump-dom mapeditor/tools/uicheck.html   # the editor UI
+node solver/verify-map.js mapeditor/maps/generated-1.json --quick   # what the map really gates
 node mapeditor/tools/e2e/server.js           # the shipped userscript + the game
 ```
+
+`uicheck.html` needs `--virtual-time-budget=9000` alongside `--dump-dom`: its
+assertions run behind timers, and without it the page is dumped before any of them
+have fired. That is safe here and *not* safe for `e2e/` -- virtual time freezes
+`requestAnimationFrame`, which is Phaser's entire game loop, so the e2e rig has to
+drive the devtools protocol instead.
 
 - **test-geometry.js** exercises the parts where a wrong sign is invisible until
   a map is already broken: four quarter turns must be the identity for every

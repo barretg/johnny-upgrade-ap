@@ -19,6 +19,65 @@
    "y": 0,
    "w": 600,
    "h": 670
+  },
+  {
+   "kind": "spike",
+   "x": 600,
+   "y": 550,
+   "w": 100,
+   "h": 60
+  },
+  {
+   "kind": "plat",
+   "x": 600,
+   "y": 610,
+   "w": 100,
+   "h": 60
+  },
+  {
+   "kind": "art",
+   "x": 599,
+   "y": 560,
+   "w": 50,
+   "h": 50,
+   "tile": "spike_with_a_little_blue_beam_that_needs_trimming",
+   "rot": 180
+  },
+  {
+   "kind": "art",
+   "x": 650,
+   "y": 560,
+   "w": 50,
+   "h": 50,
+   "tile": "spike_with_a_little_blue_beam_that_needs_trimming",
+   "rot": 180
+  },
+  {
+   "kind": "art",
+   "x": 620,
+   "y": 587,
+   "w": 10,
+   "h": 50,
+   "tile": "small_rock_surface",
+   "rot": 270
+  },
+  {
+   "kind": "art",
+   "x": 670,
+   "y": 587,
+   "w": 10,
+   "h": 50,
+   "tile": "small_rock_surface",
+   "rot": 270
+  },
+  {
+   "kind": "art",
+   "x": 1044,
+   "y": 200,
+   "w": 2,
+   "h": 10,
+   "tile": "small_rock_surface",
+   "rot": 270
   }
  ],
  "entry": {
@@ -39,7 +98,7 @@
   "h": 670
  },
  "solve": {
-  "hash": "9bb4f867c057",
+  "hash": "371fe86fd67d",
   "settings": {
    "physicsRev": 3,
    "recoilBoost": false,
@@ -69,9 +128,10 @@
   "solvedAt": "2026-08-28"
  },
  "handPlay": {
-  "hash": "ec7d848645ed",
-  "playedAt": "2026-08-27",
+  "hash": "c01655df18f2",
+  "playedAt": "2026-08-28",
   "minRung": 14,
-  "why": "Played at rung 14. The step is clearable with a normal run-up, no wall-hug or corner-boost needed."
+  "why": "Played the arena at rung 14 (14 spd5/jmp5/dj1/e2/ammo1) and cleared it on attempt 1.",
+  "attempts": 1
  }
 }

@@ -320,8 +320,27 @@ function layout(opts, profile) {
   objects.push(...start.objects);
   objects.push({ kind: 'sprt', x: x + 200, y: y - 1, w: 0, h: 0, xx: 1 });
   objects.push({ kind: 'colGun', x: x + 1500, y: y - 60, w: 0, h: 0 });
-  checks.push({ name: 'Find the Gun', kind: 'colGun', x: x + 1500, y: y - 60, band: null, rung: 0, timeTier: 0 });
+  /*
+   * The gun sits 1300px along the start corridor, and that walk costs frames like any other.
+   *
+   * It used to be written down as rung 0, time tier 0, which is wrong twice over: rung 0 has
+   * moveAccel 0, so it cannot walk anywhere at all, and tier 0 is 3 seconds -- 120 frames for a
+   * 1300px walk that verify-map.js measures at 310. Both numbers were placeholders that read as
+   * answers. Rung 1 is the first rung that can move; price the walk at rung 1's terminal speed
+   * with the same slack every other check gets.
+   */
+  const gunX = x + 1500;
+  const gunFrames = Math.round(((gunX - (x + 200)) / terminal(1)) * opts.slack);
+  const gunTier = TIMER.timeTierForFrames(gunFrames);
+  if (gunTier === null) return { overrun: { rung: 1, timeTier: 'above ' + MAX_TIME_TIER, frames: gunFrames } };
+  checks.push({ name: 'Find the Gun', kind: 'colGun', x: gunX, y: y - 60, band: null, rung: 1,
+                timeTier: gunTier });
   const vitrineAt = { x: x + 400, y: start.yBot + 900 };
+  // The start corridor is walked by every run on the way to every band, so it is spine like any
+  // other corridor. Leaving it out under-priced band 1 by 2400px -- 480 frames at rung 1 -- and
+  // under-pricing the clock is the direction that puts a check behind a timer that cannot reach
+  // it. verify-map.js found this as a LATE on the last coin of band 1.
+  corridorPx += 2400;
   x = start.x1;
 
   // --- one band per rung the library can gate
@@ -622,8 +641,10 @@ function main() {
     for (const r of res.rejected) console.log(`  ${r.name.padEnd(20)} ${r.why}`);
   }
   console.log(`\nwrote ${path.relative(ROOT, outPath)}\n      ${path.relative(ROOT, logicPath)}`);
-  console.log('Nothing here is verified: solver/verify-map.js (Phase 6) is what proves a check\n' +
-    'first becomes reachable at the rung this laid it out for.');
+  console.log(
+    'Nothing above is verified -- it is what this laid out, not what the map does. Measure it:\n' +
+      `  node solver/verify-map.js ${path.relative(ROOT, outPath).replace(/\\/g, '/')} --quick`
+  );
 }
 
 if (require.main === module) main();

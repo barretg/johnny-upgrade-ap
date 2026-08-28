@@ -95,6 +95,8 @@ const io = {
       url += '&module=' + encodeURIComponent(opts.module) + '&rung=' + encodeURIComponent(opts.rung);
       // where to go back to, which for a hand-test is NOT the map being played
       if (opts.from) url += '&from=' + encodeURIComponent(opts.from);
+      // the rest of a batch, which the play page walks without coming back here
+      if (opts.queue && opts.queue.length) url += '&queue=' + encodeURIComponent(opts.queue.join(','));
     }
     window.open(url, 'johnny-quickrun');
   },

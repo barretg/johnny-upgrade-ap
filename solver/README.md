@@ -168,6 +168,56 @@ node solve-module.js --write              # ...and store the answers in the modu
 See `mapeditor/modules/README.md` for the module format and for why every module carries a
 hand-written expected rung.
 
+## Verifying a generated map
+
+```bash
+node verify-map.js ../mapeditor/maps/generated-1.json          # both boundary rungs per band
+node verify-map.js ../mapeditor/maps/generated-1.json --quick  # gate rungs only, half the runs
+node verify-map.js <map> --rungs 1,5,6,8                       # exactly these
+node verify-map.js <map> --beam 0                              # beam off: negatives become proofs
+```
+
+`mapeditor/tools/generate-map.js` grades a map **by construction**: a band's
+entrance is a module the solver graded at rung *r*, the band is sealed behind it,
+so everything east of it is claimed to need *r*. That is an argument about
+geometry, and an argument is not a measurement. This runs the assembled map
+through the same simulator the modules were graded with and asks the sidecar's
+claims directly.
+
+It reads the `.logic.json` sidecar the generator writes, so only a generated map
+can be verified -- the sidecar is the claim being tested.
+
+Three failures, and they are not symmetric:
+
+- **LEAK** -- a check was collected at a rung below the one its band claims. The
+  run *found* a trajectory, so this is witnessed and always real. It means the map
+  is less gated than the sidecar says, and the sidecar is what becomes apworld
+  logic, so a leak is a rule that would ship too strict.
+- **MISSING** -- a band's gate check was not collected at the band's own rung. The
+  map may be unbeatable at the rung the logic promises, which is the direction that
+  ruins a seed. But a not-found is only as good as the search that produced it, and
+  this runs beamed by default: treat it as a lead and re-run that rung with
+  `--beam 0` before believing it.
+- **LATE** -- the earliest frame a check could be collected is past what its band's
+  time tier allows. A lower bound over the allowance is real whatever the beam did.
+
+Which rungs it runs is derived, not chosen: a band claiming "nothing here before
+rung *r*" can only be falsified at *r-1* (must reach nothing in the band) and at
+*r* (must reach the gate). Every run judges every band at once, so that is a set
+of rungs rather than a matrix. `--quick` drops the *r-1* probes, keeping the half
+that catches an unbeatable map.
+
+The frame numbers are **first-reach lower bounds**: the search flies straight at a
+coin and ignores that a real run has to pick up everything else on the way. A route
+that fits here may still not fit in practice; a route that does not fit here cannot.
+
+It has already earned itself twice. It caught rung 8 reaching band 12's checks in
+`generated-1` (which turned out to be the beam bug in `solve-module.js`, not a bad
+layout), and on its first real run it caught two LATEs: the gun pickup written down
+as rung 0 / tier 0 when rung 0 cannot move at all and the walk takes 310 frames, and
+band 1 under-priced by the 2400px start corridor, which the generator was not
+counting as spine.
+
 ## Conservatism
 
 Every discretization knob errs toward *under*-reporting reachability: merging states can only

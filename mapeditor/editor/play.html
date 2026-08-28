@@ -121,6 +121,20 @@ const MAP_ID = params.get('map');
 const BACK_TO = params.get('from') || params.get('map');
 const HAND_MODULE = params.get('module');
 const HAND_RUNG = params.has('rung') ? Number(params.get('rung')) : null;
+/*
+ * The rest of a batch of hand-tests.
+ *
+ * Hand-playing is a person's time, and the old loop spent a chunk of it walking
+ * back to the editor's panel to find the next module. This page walks the queue
+ * instead: record a verdict, press next, and the following module's arena is
+ * built and loaded without the editor being visited at all.
+ *
+ * Names only. The rung each one is played at is read from the library at the
+ * moment it is loaded, not captured when the batch started -- recording a verdict
+ * can RAISE a module's effective rung, and a queue that had pinned the old number
+ * would play the next module at a rung the library no longer agrees with.
+ */
+const HAND_QUEUE = (params.get('queue') || '').split(',').filter(Boolean);
 const handRung = (HAND_MODULE && typeof Ladder !== 'undefined' && HAND_RUNG !== null &&
                   Ladder.RUNGS[HAND_RUNG]) || null;
 
@@ -346,7 +360,13 @@ function renderHand() {
     '<p class="msg" id="handmsg">Failing is not the same as impossible: keep trying at this ' +
       'rung as long as you think it is on you rather than on the module. Only move up when you ' +
       'have decided the rung genuinely is not enough &mdash; a rung raised too easily grades ' +
-      'the module harder than it is, and a verdict may never be lowered afterwards.</p>';
+      'the module harder than it is, and a verdict may never be lowered afterwards.</p>' +
+    (HAND_QUEUE.length ? '<div id="handqueue"></div>' : '');
+
+  // Skipping is offered before a verdict as well: a module you cannot make
+  // progress on today should not end the whole session.
+  const qel = document.getElementById('handqueue');
+  if (qel) queueButtons(qel, false);
 
   const why = document.getElementById('handwhy');
   why.value = defaultWhy(hand);
@@ -373,6 +393,63 @@ function renderHand() {
 }
 
 const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+
+/*
+ * Load the next module in the batch.
+ *
+ * The arena is rebuilt here for the same reason the editor rebuilds it: an arena
+ * left over from before an edit is the wrong geometry to play, and a verdict
+ * recorded against it would be a verdict about something else.
+ *
+ * The rung comes from the library as it stands NOW. max(solve, handPlay), the
+ * same rule solve-module.js's effectiveMinRung uses -- a hand-play may only ever
+ * raise a rung, so the effective number is the larger of the two.
+ */
+async function gotoNextInQueue() {
+  const rest = HAND_QUEUE.slice();
+  const name = rest.shift();
+  if (!name) return;
+  const msg = document.getElementById('handmsg');
+  if (msg) { msg.className = 'msg'; msg.textContent = 'building ' + name + '\u2026'; }
+  let lib = [], built = null;
+  try {
+    lib = await (await fetch('/api/modules')).json();
+    built = await (await fetch('/api/arena/' + encodeURIComponent(name), { method: 'POST' })).json();
+  } catch (e) { built = { ok: false, error: e.message }; }
+  const m = (Array.isArray(lib) ? lib : []).find((x) => x.name === name);
+  const solved = m && m.solve && typeof m.solve.minRung === 'number' ? m.solve.minRung : null;
+  const played = m && m.handPlay && typeof m.handPlay.minRung === 'number' ? m.handPlay.minRung : null;
+  const rung = played === null ? solved : (solved === null ? played : Math.max(solved, played));
+  if (!built || !built.ok || rung === null) {
+    if (msg) {
+      msg.className = 'msg bad';
+      msg.textContent = 'could not open ' + name + ': ' +
+        ((built && built.error) || (rung === null ? 'it has no rung to test at' : 'no reason given'));
+    }
+    return;
+  }
+  const u = new URL(location.href);
+  u.searchParams.set('map', built.id);
+  u.searchParams.set('module', name);
+  u.searchParams.set('rung', String(rung));
+  if (rest.length) u.searchParams.set('queue', rest.join(','));
+  else u.searchParams.delete('queue');
+  location.href = u.toString();
+}
+
+/** The batch control, offered whether or not a verdict was just recorded. */
+function queueButtons(into, done) {
+  if (!HAND_QUEUE.length) return;
+  const b = document.createElement('button');
+  b.className = done ? 'primary' : '';
+  b.textContent = (done ? 'next: ' : 'skip to ') + HAND_QUEUE[0] +
+    ' (' + HAND_QUEUE.length + ' left)';
+  b.title = done
+    ? 'Build this module\'s arena and play it at its own rung. The editor is not visited in between.'
+    : 'Leave this module unplayed and move on. Nothing is recorded for it, so it stays in the queue.';
+  b.onclick = gotoNextInQueue;
+  into.appendChild(b);
+}
 
 async function recordVerdict(why, attempts) {
   const msg = document.getElementById('handmsg');
@@ -404,6 +481,10 @@ async function recordVerdict(why, attempts) {
       (r.solved !== null && r.minRung > r.solved
         ? ', raised from the solved ' + r.solved + '.'
         : ', confirming the solved rung.');
+    // The verdict is written down, so the next module in the batch is the obvious
+    // next act -- and it is now the primary button rather than an aside.
+    const qel = document.getElementById('handqueue');
+    if (qel) { qel.innerHTML = ''; queueButtons(qel, true); }
   } else {
     msg.className = 'msg bad';
     msg.textContent = (r && r.error) || 'could not record it';

@@ -63,6 +63,14 @@
    "h": 670,
    "right": 1300,
    "bottom": 670
+  },
+  {
+   "x": 600,
+   "y": 610,
+   "w": 100,
+   "h": 60,
+   "right": 700,
+   "bottom": 670
   }
  ],
  "coins": [
@@ -76,6 +84,12 @@
    "x": -500,
    "y": 1310,
    "w": 2300,
+   "h": 60
+  },
+  {
+   "x": 600,
+   "y": 550,
+   "w": 100,
    "h": 60
   }
  ],
@@ -137,6 +151,61 @@
  },
  "yEnd": 1770,
  "art": [
+  {
+   "tile": "spike_with_a_little_blue_beam_that_needs_trimming",
+   "x": 599,
+   "y": 560,
+   "w": 50,
+   "h": 50,
+   "rot": 180,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "spike_with_a_little_blue_beam_that_needs_trimming",
+   "x": 650,
+   "y": 560,
+   "w": 50,
+   "h": 50,
+   "rot": 180,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "small_rock_surface",
+   "x": 620,
+   "y": 587,
+   "w": 10,
+   "h": 50,
+   "rot": 270,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "small_rock_surface",
+   "x": 670,
+   "y": 587,
+   "w": 10,
+   "h": 50,
+   "rot": 270,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "small_rock_surface",
+   "x": 1044,
+   "y": 200,
+   "w": 2,
+   "h": 10,
+   "rot": 270,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
   {
    "tile": "hazard_surface",
    "x": -500,
@@ -351,6 +420,17 @@
    "x": 1685,
    "y": 1310,
    "w": 115,
+   "h": 60,
+   "rot": 0,
+   "flipX": 0,
+   "flipY": 0,
+   "z": 0
+  },
+  {
+   "tile": "hazard_surface",
+   "x": 600,
+   "y": 550,
+   "w": 100,
    "h": 60,
    "rot": 0,
    "flipX": 0,

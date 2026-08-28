@@ -44,6 +44,21 @@ const MODUNSOLVED = {
   objects: [ { kind:'plat', x:0, y:0, w:400, h:100 } ],
   size: { w:400, h:100 }, entry: { x:0, y:0 }, exit: { x:400, y:0 },
 };
+/*
+ * A third module whose rung is an UPPER BOUND rather than a proof.
+ *
+ * solve.exact === false is the solver saying the negative that decided this rung
+ * came from a beamed search that had thrown states away, so the module may be
+ * clearable lower down. Two things in the panel hang off it: the badge has to say
+ * so rather than showing a plain rung, and it belongs in the queue of things
+ * waiting on a person -- a hand-play is what settles it.
+ */
+const MODBOUND = {
+  name: 'stub-bound', version: 1, tags: ['crusher'],
+  objects: [ { kind:'plat', x:0, y:0, w:800, h:200 } ],
+  size: { w:800, h:200 }, entry: { x:0, y:0 }, exit: { x:800, y:0 },
+  solve: { hash:'cccc', minRung: 17, exact: false, frames: 300 },
+};
 let savedModule = null;
 const solveCalls = [];
 const arenaCalls = [];
@@ -56,13 +71,19 @@ const io = {
   saveMap: async () => ({ ok: true }),
   tiles: async () => [],
   tileImage: () => null,
-  listModules: async () => [JSON.parse(JSON.stringify(MODFIX)), JSON.parse(JSON.stringify(MODUNSOLVED))],
+  listModules: async () => [MODFIX, MODUNSOLVED, MODBOUND].map((m) => JSON.parse(JSON.stringify(m))),
   saveModule: async (name, m) => { savedModule = m; return { ok: true, name }; },
   solveModule: async (name) => { solveCalls.push(name); return { ok: true, minRung: 8 }; },
   moduleArena: async (name) => { arenaCalls.push(name); return { ok: true, id: 'module-' + name }; },
   play: (id, opts) => { playCalls.push({ id, opts }); },
 };
 MapEditor.mount({ root: document.getElementById('host'), io });
+
+// editModule() asks before replacing the canvas. A headless browser dismisses
+// dialogs, and a dismissed confirm reads as "the user said no" -- which would make
+// the test measure the stub rather than the editor. Say yes, and count the asks.
+let confirms = [];
+window.confirm = (msg) => { confirms.push(msg); return true; };
 
 const S = () => MapEditor._state();
 const q = (id) => document.querySelector('#mde-' + id);
@@ -80,6 +101,38 @@ const drag = (x0, y0, x1, y1, opts) => {
   ev('mouseup', x1, y1, opts);
 };
 const click = (x, y, opts) => { ev('mousedown', x, y, opts); ev('mouseup', x, y, opts); };
+/*
+ * A paint stroke, in WORLD coordinates and with enough intermediate moves that no
+ * cell is skipped.
+ *
+ * drag() emits two mousemoves, which is fine for resizing a box and useless for
+ * painting: paint stamps the cell under each move it is handed, so a two-move
+ * stroke across ten cells paints three of them. That is the real behaviour of a
+ * mouse as well -- a fast flick genuinely does skip cells -- so this models a
+ * hand moving slowly enough that it does not, rather than pretending the editor
+ * interpolates.
+ */
+const stroke = (wx0, wy0, wx1, wy1, steps) => {
+  const n = steps || 40;
+  const a = w2s(wx0, wy0);
+  ev('mousedown', a[0], a[1]);
+  for (let i = 1; i <= n; i++) {
+    const p = w2s(wx0 + (wx1 - wx0) * i / n, wy0 + (wy1 - wy0) * i / n);
+    ev('mousemove', p[0], p[1]);
+  }
+  const b = w2s(wx1, wy1);
+  ev('mouseup', b[0], b[1]);
+};
+// Somewhere below everything already on the canvas, aligned to the grid, so a
+// stroke there meets nothing the earlier tests left behind.
+const emptyRow = () => {
+  let bottom = 0;
+  for (const o of S().objects) {
+    const b = MapEditor._geom.bounds(o);
+    bottom = Math.max(bottom, b.y + b.h);
+  }
+  return Math.ceil((bottom + 400) / 50) * 50;
+};
 // with a live selection the first click on a tool only commits it, which is
 // the editor's own rule; clearing first keeps the tests honest about that
 const deselect = () => { document.querySelector('#mde-tools button[data-tool="select"]').click(); click(4, 4); };
@@ -222,12 +275,114 @@ function run() {
   ok(hud1 !== hud2 && /x/.test(hud2), 'the readout updates on a plain mouse move',
      hud2.replace(/ /g, ' ').slice(0, 46));
 
+  paintMode();
+
   // ---------------------------------------------------- undo unwinds all of it
   const n0 = S().objects.length;
   for (let i = 0; i < 60; i++) document.dispatchEvent(new KeyboardEvent('keydown', { key:'z', ctrlKey:true, bubbles:true }));
   ok(S().objects.length <= n0, 'ctrl+z runs without throwing', S().objects.length + ' of ' + n0);
 
   modules();
+}
+
+/*
+ * Grid paint.
+ *
+ * The claim being tested is not "a drag makes objects" -- it is the three rules
+ * that make a stroke usable rather than a mess to tidy up: every stamp fills its
+ * cell exactly, a cell is never stamped twice however often the cursor crosses
+ * it, and the whole stroke is one undo. Each of those is a thing that, done
+ * wrong, costs an author time instead of looking like a bug -- a hairline
+ * between two platforms is a hole Johnny falls through, and a stroke that undoes
+ * cell by cell is worse than no undo at all.
+ *
+ * Counts are deltas, not totals: this runs after the drawing tests and on the
+ * same canvas they left behind.
+ */
+function paintMode() {
+  deselect();
+  q('grid').value = '50'; q('grid').dispatchEvent(new Event('change'));
+
+  ok(!S().paint, 'paint is off to begin with');
+  q('paint').click();
+  ok(S().paint, 'the toolbar button turns it on');
+
+  const y0 = emptyRow();
+  const plats0 = of('plat').length;
+
+  tool('plat');
+  // Ten cells of 50 along a row, painted left to right through their middles.
+  stroke(2000, y0 + 25, 2450, y0 + 25);
+  const painted = of('plat').slice(plats0);
+  ok(painted.length === 10, 'a stroke across ten cells paints ten platforms', painted.length);
+  ok(painted.every((o) => o.w === 50 && o.h === 50),
+     'each stamp fills its cell exactly', painted.map((o) => o.w + 'x' + o.h).join(' '));
+  ok(painted.every((o) => o.x % 50 === 0 && o.y % 50 === 0),
+     'and lands on the grid', painted.map((o) => o.x + ',' + o.y).join(' '));
+  const xs = painted.map((o) => o.x).sort((a, b) => a - b);
+  ok(xs.every((x, i) => i === 0 || x - xs[i - 1] === 50),
+     'with no gap between neighbours -- a hairline here is a hole in the floor', xs.join(' '));
+  ok(S().sel.length === 10, 'the finished stroke selects what it made', S().sel.length);
+
+  // Back over the same cells: nothing new, because a cell already holding a
+  // platform of this kind is skipped.
+  stroke(2450, y0 + 25, 2000, y0 + 25);
+  ok(of('plat').length === plats0 + 10,
+     'painting back over the stroke adds nothing', of('plat').length - plats0);
+
+  // A different kind ignores the platforms and paints the same cells.
+  const coins0 = of('coin').length;
+  tool('coin');
+  stroke(2000, y0 + 25, 2450, y0 + 25);
+  const coins = of('coin').slice(coins0);
+  ok(coins.length === 10, 'another kind paints the same cells', coins.length);
+  /*
+   * That stroke started on top of the ten platforms the last one selected, whose
+   * group handles run along exactly that edge. Ten coins rather than a resized
+   * platform run is the whole point: in paint mode a drag paints.
+   */
+  ok(of('plat').length === plats0 + 10 &&
+     of('plat').slice(plats0).every((o) => o.w === 50),
+     'and the previous stroke was not grabbed by its handles and stretched instead',
+     of('plat').slice(plats0).map((o) => o.w).join(' '));
+  ok(coins.every((o) => o.x % 50 === 25 && o.y % 50 === 25),
+     'point kinds land in the middle of their cell',
+     coins.slice(0, 3).map((o) => o.x + ',' + o.y).join(' '));
+
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  ok(of('coin').length === coins0 && of('plat').length === plats0 + 10,
+     'one ctrl+z takes back the whole stroke and nothing else',
+     (of('coin').length - coins0) + ' coins left, ' + (of('plat').length - plats0) + ' plats');
+
+  // ---------------------------------------------------- paint needs cells
+  q('grid').value = '0'; q('grid').dispatchEvent(new Event('change'));
+  ok(!S().paint, 'selecting a free grid turns paint off -- there are no cells to paint into');
+  ok(q('paint').disabled, 'and the button says so rather than looking armed');
+  q('grid').value = '50'; q('grid').dispatchEvent(new Event('change'));
+  ok(!S().paint, 'and coming back to a grid does not silently re-arm it');
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', bubbles: true }));
+  ok(S().paint, 'key p turns it on again');
+
+  // ---------------------------------------------------- textures letterbox
+  /*
+   * The auto-size rule, checked on the geometry rather than through the palette:
+   * the fixture io serves no tiles, and what is worth pinning down is that a tile
+   * keeps its aspect ratio. A stretched tile is the difference between a wall
+   * that looks like the game and one that looks like the game in a funhouse
+   * mirror.
+   */
+  const wide = MapEditor._geom.fitTile(200, 100, 50);
+  ok(wide.w === 50 && wide.h === 25, 'a 2:1 tile fits the cell across', wide.w + 'x' + wide.h);
+  ok(wide.dx === 0 && wide.dy === 13, 'and is centred in the leftover', wide.dx + ',' + wide.dy);
+  const tall = MapEditor._geom.fitTile(100, 400, 50);
+  ok(tall.w === 13 && tall.h === 50, 'a tall tile fits the other way', tall.w + 'x' + tall.h);
+  const small = MapEditor._geom.fitTile(20, 20, 50);
+  ok(small.w === 20 && small.h === 20,
+     'a tile smaller than the cell is left alone rather than blown up', small.w + 'x' + small.h);
+
+  q('paint').click();
+  ok(!S().paint, 'and the button turns it back off');
+  deselect();
 }
 
 /*
@@ -244,10 +399,80 @@ function run() {
  */
 function modules() {
   deselect();
+  /*
+   * The work queue.
+   *
+   * Which modules still need a person was previously answerable only by opening
+   * every file in mapeditor/modules/ and reading it, which is why an upper bound
+   * sat unnoticed in the library for a whole phase. The chips are the answer, so
+   * what is tested is that they count the right things and that clicking one
+   * really narrows the list.
+   */
+  // the batch launcher shares the bar with the chips; it is tested on its own below
+  const chipEls = [...q('modqueue').querySelectorAll('button')].filter((b) => !/play all/.test(b.textContent));
+  const chips = chipEls.map((b) => b.textContent);
+  ok(chips.join(' | ') === '3 all | 1 unsolved | 0 conflict | 1 upper bound | 0 unplayed',
+     'the queue bar counts each state that needs a person', chips.join(' | '));
+  ok(chipEls.slice(1).every((b) => b.title.length > 80),
+     'and every queue chip explains its state, since not one of them is self-explanatory');
+  q('modqueue').querySelectorAll('button')[1].click();   // unsolved
+  ok(document.querySelectorAll('#mde-modlist .mod').length === 1,
+     'clicking a chip filters the list to that queue',
+     document.querySelectorAll('#mde-modlist .mod').length);
+  ok(document.querySelector('#mde-modlist .mod').dataset.module === 'stub-new',
+     'and it is the right one', document.querySelector('#mde-modlist .mod').dataset.module);
+  ok(!!document.querySelector('#mde-modlist .mod .act'),
+     'an unsolved row carries its one-click action');
+  q('modqueue').querySelectorAll('button')[1].click();   // off again
+  ok(document.querySelectorAll('#mde-modlist .mod').length === 3,
+     'clicking it again clears the filter', document.querySelectorAll('#mde-modlist .mod').length);
+
+  /*
+   * An upper bound must not read like a solved rung.
+   *
+   * It is a real, usable number and the safe direction to be wrong in -- a check
+   * labelled harder than it is comes available early, which cannot make a seed
+   * unbeatable -- but it is a ceiling, not the answer, and a badge that looked
+   * identical to a proved rung is how one sat unnoticed in the library for a
+   * whole phase.
+   */
+  const boundRow = [...document.querySelectorAll('#mde-modlist .mod')]
+    .find((r) => r.dataset.module === 'stub-bound');
+  const boundBadge = boundRow && boundRow.querySelector('.rung');
+  ok(boundBadge && /\u2264\s*17/.test(boundBadge.textContent),
+     'an upper bound is badged as at-most, not as a plain rung',
+     boundBadge && boundBadge.textContent);
+  ok(boundBadge && boundBadge.classList.contains('bound'),
+     'and marked as one, so it does not read as a proof');
+
+  /*
+   * Batch hand-testing: the queue is played end to end without coming back here.
+   * The button exists only when something is actually waiting, and it launches
+   * the FIRST module with the rest carried along.
+   */
+  const playAll = [...q('modqueue').querySelectorAll('button')].find((b) => /play all/.test(b.textContent));
+  ok(!!playAll, 'a batch button appears when modules are waiting on a person',
+     playAll && playAll.textContent);
+  const arenas0 = arenaCalls.length, plays0 = playCalls.length;
+  playAll.click();
+  setTimeout(() => {
+    ok(arenaCalls.length === arenas0 + 1 && arenaCalls[arenas0] === 'stub-bound',
+       'and it starts with the lowest-rung module waiting', arenaCalls.slice(arenas0).join());
+    ok(playCalls.length === plays0 + 1 && playCalls[plays0].opts.rung === 17,
+       'at the rung the library holds for it', JSON.stringify(playCalls[plays0] && playCalls[plays0].opts));
+    ok(playCalls[plays0].opts.queue === null,
+       'with nothing queued behind it, since it was the only one waiting',
+       JSON.stringify(playCalls[plays0].opts.queue));
+    modulesRest();
+  }, 20);
+}
+
+function modulesRest() {
+
   const modRow = [...document.querySelectorAll('#mde-modlist .mod')]
     .find((r) => r.dataset.module === 'stub-gap');
   ok(!!modRow, 'the module panel lists the library');
-  ok(document.querySelectorAll('#mde-modlist .mod').length === 2, 'both modules',
+  ok(document.querySelectorAll('#mde-modlist .mod').length === 3, 'the whole library',
      document.querySelectorAll('#mde-modlist .mod').length);
   ok(/unsolved/.test([...document.querySelectorAll('#mde-modlist .mod')]
       .find((r) => r.dataset.module === 'stub-new').textContent),
@@ -409,23 +634,92 @@ function handTestUI() {
   ok(![...freshRow.querySelectorAll('button')].some((b) => /hand-test/.test(b.textContent)),
      'an unsolved module offers none: there is no rung to make a claim about');
 
+  // deltas: the batch test above has already been through this path once
+  const a0 = arenaCalls.length, p0 = playCalls.length;
   btn.click();
   setTimeout(() => {
-    ok(arenaCalls.length === 1 && arenaCalls[0] === 'stub-gap',
+    ok(arenaCalls.length === a0 + 1 && arenaCalls[a0] === 'stub-gap',
        'the arena is rebuilt before playing, so the geometry tested is the geometry saved',
-       arenaCalls.join());
-    ok(playCalls.length === 1 && playCalls[0].id === 'module-stub-gap',
-       'and that arena is what gets played', JSON.stringify(playCalls[0]));
-    ok(playCalls[0].opts && playCalls[0].opts.module === 'stub-gap' && playCalls[0].opts.rung === 12,
+       arenaCalls.slice(a0).join());
+    ok(playCalls.length === p0 + 1 && playCalls[p0].id === 'module-stub-gap',
+       'and that arena is what gets played', JSON.stringify(playCalls[p0]));
+    ok(playCalls[p0].opts && playCalls[p0].opts.module === 'stub-gap' && playCalls[p0].opts.rung === 12,
        'at the effective rung (12: hand-played), not the solved rung (8)',
-       JSON.stringify(playCalls[0].opts));
+       JSON.stringify(playCalls[p0].opts));
     ok(!S().armed, 'and clicking hand-test does not arm the module for placement');
-    ok(playCalls[0].opts.from === ((S().meta && S().meta.id) || ''),
+    ok(playCalls[p0].opts.from === ((S().meta && S().meta.id) || ''),
        'and it carries the map being edited, so "back to editor" returns to the work ' +
        'rather than to the throwaway arena',
-       JSON.stringify(playCalls[0].opts.from));
-    rungRef();
+       JSON.stringify(playCalls[p0].opts.from));
+    editUI();
   }, 20);
+}
+
+/*
+ * Module-first editing.
+ *
+ * The claim is that a module can be opened, changed and saved back WITHOUT a
+ * selection ever being involved -- because a selection is where the old workflow
+ * went wrong. Marquee one platform too few and the module loses a wall; one too
+ * many and it swallows a piece of whatever map it was borrowing. Either way the
+ * geometry hash moves and the solve record and hand-play verdict are dropped, and
+ * the only sign is a badge going grey.
+ *
+ * So what is tested is: the canvas ends up holding the module and nothing else,
+ * the dialog opens filled in, and an object drawn afterwards is IN the saved
+ * record without anyone selecting anything.
+ */
+function editUI() {
+  savedModule = null;
+  const row = [...document.querySelectorAll('#mde-modlist .mod')]
+    .find((r) => r.dataset.module === 'stub-gap');
+  const btn = [...row.querySelectorAll('button')].find((b) => b.textContent === 'edit');
+  ok(!!btn, 'every module row offers to open it on its own');
+
+  const asks = confirms.length;
+  btn.click();
+  ok(confirms.length === asks + 1,
+     'and asks first, because it replaces whatever map is open');
+  ok(S().objects.length === MODFIX.objects.length,
+     'the canvas ends up holding the module and nothing else',
+     S().objects.length + ' of ' + MODFIX.objects.length);
+  ok(/^module: /.test(S().meta.name) && !S().meta.id,
+     'under a name that says what it is, and with no map id to save over',
+     S().meta.name + ' / ' + JSON.stringify(S().meta.id));
+  ok(S().objects.every((o) => o.x >= 0),
+     'placed at the origin, so what is on screen matches the numbers in the file',
+     S().objects.map((o) => o.x).join(' '));
+
+  const dlg = S().dialog;
+  ok(!!dlg && dlg.whole, 'the save dialog is already open, in whole-canvas mode');
+  ok(dlg && q('modpanel').querySelectorAll('input')[0].value === 'stub-gap' &&
+     q('modpanel').querySelectorAll('input')[1].value === 'gap, jump',
+     'filled in with the module\'s own name and tags',
+     [q('modpanel').querySelectorAll('input')[0].value,
+      q('modpanel').querySelectorAll('input')[1].value].join(' / '));
+  ok(dlg && dlg.entry.x === MODFIX.entry.x && dlg.exit.x === MODFIX.exit.x,
+     'and with the entry and exit the module already had, not a fresh guess',
+     JSON.stringify([dlg && dlg.entry, dlg && dlg.exit]));
+  ok(/Editing module/.test(q('modpanel').textContent),
+     'the heading says which of the two things this is');
+
+  // Draw one more platform. Nothing is selected and nothing is re-marqueed.
+  const before = S().objects.length;
+  const sel0 = S().sel.length;
+  tool('plat');
+  drag(300, 300, 420, 360);
+  ok(S().objects.length === before + 1, 'drawing while editing adds to the canvas',
+     S().objects.length);
+
+  saveDialogAs('stub-gap');
+  setTimeout(() => {
+    ok(!!savedModule, 'saving writes the module back');
+    ok(savedModule && savedModule.objects.length === MODFIX.objects.length + 1,
+       'and the record covers everything on the canvas, including what was drawn after opening',
+       savedModule && savedModule.objects.length);
+    ok(sel0 >= 0 && !S().dialog, 'the dialog closes on save');
+    rungRef();
+  }, 30);
 }
 
 /*

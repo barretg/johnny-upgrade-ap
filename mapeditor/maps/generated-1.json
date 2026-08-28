@@ -2966,8 +2966,8 @@
     "x1": 7200,
     "gate": "flat-run",
     "checks": 6,
-    "timeTier": 4,
-    "framesEstimate": 1408
+    "timeTier": 6,
+    "framesEstimate": 2176
    },
    {
     "rung": 6,
@@ -2975,8 +2975,8 @@
     "x1": 13800,
     "gate": "robot-single",
     "checks": 6,
-    "timeTier": 8,
-    "framesEstimate": 2692
+    "timeTier": 9,
+    "framesEstimate": 3240
    },
    {
     "rung": 8,
@@ -2984,8 +2984,8 @@
     "x1": 19500,
     "gate": "gap-double-jump",
     "checks": 6,
-    "timeTier": 11,
-    "framesEstimate": 3954
+    "timeTier": 13,
+    "framesEstimate": 4503
    },
    {
     "rung": 12,
@@ -2993,8 +2993,8 @@
     "x1": 25300,
     "gate": "spike-corridor",
     "checks": 6,
-    "timeTier": 14,
-    "framesEstimate": 4816
+    "timeTier": 15,
+    "framesEstimate": 5296
    },
    {
     "rung": 14,
@@ -3002,8 +3002,8 @@
     "x1": 30800,
     "gate": "ledge-tall",
     "checks": 6,
-    "timeTier": 15,
-    "framesEstimate": 5472
+    "timeTier": 17,
+    "framesEstimate": 5898
    },
    {
     "rung": 17,
@@ -3011,8 +3011,8 @@
     "x1": 37400,
     "gate": "crusher-gate",
     "checks": 6,
-    "timeTier": 18,
-    "framesEstimate": 6256
+    "timeTier": 19,
+    "framesEstimate": 6640
    },
    {
     "rung": 20,
@@ -3020,8 +3020,8 @@
     "x1": 43465,
     "gate": "gap-wide",
     "checks": 6,
-    "timeTier": 19,
-    "framesEstimate": 6852
+    "timeTier": 20,
+    "framesEstimate": 7201
    }
   ],
   "modules": [

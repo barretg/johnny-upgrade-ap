@@ -281,6 +281,34 @@ const CSS = `
 #mde-root .mod .rung.solved { background:#2b3346; color:var(--accent); }
 #mde-root .mod .rung.none { background:#3a2027; color:var(--bad); }
 #mde-root .mod .rung.bad { background:#3a2027; color:var(--bad); }
+/*
+ * An UPPER BOUND is not a fourth shade of "solved", so it does not get one.
+ *
+ * The solver reports exact:false when the negative that decided a rung came
+ * from a beamed search that had thrown states away -- the module may well be
+ * clearable lower down. That is the safe direction (a check labelled harder than
+ * it is comes available early, which cannot make a seed unbeatable) but it is
+ * not an answer, and a badge that reads the same as a proved rung would let it
+ * pass for one. The bound is drawn with a leading tilde and a dotted underline
+ * to say the number is approximate without inventing a fifth colour.
+ */
+#mde-root .mod .rung.bound { border-bottom:1px dotted currentColor; }
+
+/*
+ * The work queue.
+ *
+ * The three states that need a person -- unsolved, solved-but-never-played, and
+ * a rung that is only an upper bound -- were previously visible only by opening
+ * eight JSON files and reading them, which is why they went unnoticed for a
+ * whole phase. Counts here, filters on click, and the action on each row.
+ */
+#mde-modqueue { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:5px; }
+#mde-modqueue button { font-size:9px; padding:2px 5px; border-radius:3px; flex:none;
+  background:#12141a; border:1px solid var(--line); color:var(--dim); cursor:pointer; }
+#mde-modqueue button.on { border-color:var(--accent); color:var(--fg); background:#2b3346; }
+#mde-modqueue button.empty { opacity:.4; }
+#mde-root .mod .act { background:#2b3346; border:1px solid var(--line); border-radius:3px;
+  color:var(--fg); font-size:9px; padding:1px 5px; cursor:pointer; }
 #mde-root .mod .tags { color:var(--dim); font-size:9px; overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; }
 #mde-root .mod .ex { background:none; border:0; color:var(--dim); font-size:9px; padding:0;
@@ -338,6 +366,7 @@ const HTML = `
     <option value="50">50</option>
     <option value="100">100</option>
   </select>
+  <button id="mde-paint" title="Paint mode. Drag across the canvas and every grid cell the cursor enters gets one stamp of the armed tool, snapped to the cell and never doubled up. The whole stroke is one undo. Needs a grid; key p.">paint</button>
   <button id="mde-artTop" class="on">textures on top</button>
   <button id="mde-fit">fit</button>
   <button id="mde-save">save</button>
@@ -357,6 +386,7 @@ const HTML = `
   </div>
   <div class="sec" id="mde-modsec">
     <h2>Modules</h2>
+    <div id="mde-modqueue"></div>
     <div id="mde-modlist"></div>
     <button id="mde-modsave" style="width:100%;margin-top:6px">save selection as module…</button>
     <button id="mde-rungref" style="width:100%;margin-top:5px">rung reference</button>
@@ -405,6 +435,7 @@ let tool = 'select';
 let selTile = null;
 let view = { x: 0, y: 0, z: 0.35 };
 let grid = 0;   // free by default; per-map preference is restored on open
+let paint = false;  // grid paint: a drag stamps one object per cell entered
 let nextId = 1;
 let tileImgs = new Map();
 let tileList = [], tileNodes = new Map();
@@ -592,11 +623,69 @@ const geomKey = (m) => canonical({ objects: m.objects, entry: m.entry, exit: m.e
 function moduleRung(m) {
   const solved = m && m.solve && typeof m.solve.minRung === 'number' ? m.solve.minRung : null;
   const hand = m && m.handPlay && typeof m.handPlay.minRung === 'number' ? m.handPlay.minRung : null;
-  if (solved === null && hand === null) return { rung: null, played: false, conflict: false };
-  if (hand === null) return { rung: solved, played: false, conflict: false };
-  if (solved === null) return { rung: hand, played: true, conflict: false };
-  return { rung: Math.max(solved, hand), played: true, conflict: hand < solved };
+  /*
+   * `bound` is the solver saying its own answer is not a proof: the negative that
+   * decided the rung came from a search that had discarded states, so the module
+   * may be clearable lower down. It is carried here rather than left in the file
+   * because it changes what the number MEANS, and a panel that shows the number
+   * without it is showing an answer where there is an estimate.
+   *
+   * A hand-play verdict settles it. A person clearing the module at rung r is a
+   * fact about the game, not about the beam, so once played the bound stops
+   * mattering to the effective rung.
+   */
+  const bound = !!(m && m.solve && m.solve.exact === false) && hand === null;
+  if (solved === null && hand === null) return { rung: null, played: false, conflict: false, bound: false };
+  if (hand === null) return { rung: solved, played: false, conflict: false, bound };
+  if (solved === null) return { rung: hand, played: true, conflict: false, bound: false };
+  return { rung: Math.max(solved, hand), played: true, conflict: hand < solved, bound: false };
 }
+
+/*
+ * Which queue a module is in, or null if it needs nothing.
+ *
+ * Ordered by how much it matters that a person does something about it: an
+ * unsolved module has no difficulty at all and the generator refuses it outright;
+ * a conflict is a physics bug wearing a difficulty badge; an upper bound is a
+ * usable number that is not yet an answer; and unplayed is the ordinary state of
+ * a module that has been solved this afternoon and not yet played.
+ */
+function moduleQueue(m) {
+  const r = moduleRung(m);
+  if (r.rung === null) return 'unsolved';
+  if (r.conflict) return 'conflict';
+  if (r.bound) return 'bound';
+  if (!r.played) return 'unplayed';
+  return null;
+}
+
+/*
+ * The queue filter. null shows everything; otherwise only that queue.
+ *
+ * Deliberately not persisted: it is a way of working through a list in one
+ * sitting, and a filter that survives a reload is a library that has silently
+ * lost half its modules.
+ */
+let modFilter = null;
+
+const QUEUES = [
+  ['unsolved', 'unsolved',
+   'No difficulty is known for these at all. generate-map.js refuses them outright, and the ' +
+   'editor cannot say what rung placing one would imply. Solve them first.'],
+  ['conflict', 'conflict',
+   'The hand-play verdict is BELOW the solved rung: a person cleared what the simulator says is ' +
+   'impossible. That is a physics bug, not a difficulty correction, and solve-module.js refuses ' +
+   'to write it down.'],
+  ['bound', 'upper bound',
+   'Solved, but the negative that decided the rung came from a beamed search that had thrown ' +
+   'states away -- so the module may be clearable lower down. Safe to build with (a check ' +
+   'labelled too hard comes available early, which cannot make a seed unbeatable) but it is an ' +
+   'estimate, not a proof. A hand-play settles it.'],
+  ['unplayed', 'unplayed',
+   'Solved but never played by a person. The solver answers "physically possible" frame by ' +
+   'frame; whether a human can actually do it is the other half of the answer, and only a ' +
+   'hand-test gives it.'],
+];
 
 /*
  * Where a module is entered and left.
@@ -885,7 +974,7 @@ function renderRungRef() {
  * actually clear that" has a short memory, and a loop that ends in another tab
  * ends with nobody writing anything down.
  */
-async function handTest(m) {
+async function handTest(m, queue) {
   const rung = moduleRung(m).rung;
   if (rung === null) return;
   let built = null;
@@ -898,7 +987,14 @@ async function handTest(m) {
   }
   // the arena is a detour, not a destination: hand the play page the map that was
   // open so "back to editor" returns to the work, not to the module's test box
-  io.play(built.id, { module: m.name, rung, from: (map.meta && map.meta.id) || '' });
+  io.play(built.id, {
+    module: m.name,
+    rung,
+    from: (map.meta && map.meta.id) || '',
+    // What is left to play after this one. The play page walks it itself, so a
+    // session of hand-tests never comes back through this panel.
+    queue: queue && queue.length ? queue : null,
+  });
 }
 
 // ---------------------------------------------------------------- module panels
@@ -919,6 +1015,47 @@ function moduleSectionVisible() {
   return on;
 }
 
+/*
+ * The queue bar: one chip per state that needs a person, with its count.
+ *
+ * A chip with nothing in it stays on screen, dimmed, rather than disappearing.
+ * A row of chips that changes shape as the library changes is a row nobody can
+ * learn the position of, and "0 unsolved" is worth reading -- it is the thing
+ * being checked.
+ */
+function buildModuleQueue() {
+  const el = $('modqueue');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!moduleLib.length) return;
+  const counts = {};
+  for (const m of moduleLib) {
+    const q = moduleQueue(m);
+    if (q) counts[q] = (counts[q] || 0) + 1;
+  }
+  const total = moduleLib.length;
+  const mk = (key, label, n, title) => {
+    const b = document.createElement('button');
+    b.textContent = n + ' ' + label;
+    b.title = title;
+    b.className = (modFilter === key ? 'on ' : '') + (n ? '' : 'empty');
+    b.onclick = () => { modFilter = modFilter === key ? null : key; buildModuleQueue(); buildModuleList(); };
+    el.appendChild(b);
+  };
+  mk(null, 'all', total, 'Every module in the library.');
+  for (const [key, label, why] of QUEUES) mk(key, label, counts[key] || 0, why);
+
+  const waiting = (counts.unplayed || 0) + (counts.bound || 0);
+  if (waiting && io.moduleArena && io.play) {
+    const b = document.createElement('button');
+    b.textContent = 'play all ' + waiting + ' \u2192';
+    b.title = 'Hand-test everything waiting on a person, easiest rung first, without coming ' +
+      'back here between modules. The play page walks the rest of the queue itself.';
+    b.onclick = handTestQueue;
+    el.appendChild(b);
+  }
+}
+
 async function refreshModuleList() {
   if (!moduleSectionVisible()) return;
   try {
@@ -928,6 +1065,7 @@ async function refreshModuleList() {
     console.warn('[editor] could not read the module library', e);
     moduleLib = [];
   }
+  buildModuleQueue();
   buildModuleList();
 }
 
@@ -939,7 +1077,12 @@ function buildModuleList() {
     el.innerHTML = '<span class="muted">no modules yet</span>';
     return;
   }
-  const sorted = [...moduleLib].sort((a, b) => {
+  const shown = modFilter ? moduleLib.filter((m) => moduleQueue(m) === modFilter) : moduleLib;
+  if (!shown.length) {
+    el.innerHTML = '<span class="muted">nothing in that queue</span>';
+    return;
+  }
+  const sorted = [...shown].sort((a, b) => {
     const ra = moduleRung(a).rung, rb = moduleRung(b).rung;
     if (ra === null && rb === null) return String(a.name).localeCompare(b.name);
     if (ra === null) return 1;
@@ -956,7 +1099,13 @@ function buildModuleList() {
     if (solving.has(m.name)) { badge.classList.add('busy'); badge.textContent = 'solving…'; }
     else if (r.conflict) { badge.classList.add('bad'); badge.textContent = 'rung ' + r.rung + ' ?'; }
     else if (r.rung === null) { badge.classList.add('none'); badge.textContent = 'unsolved'; }
-    else { badge.classList.add(r.played ? 'played' : 'solved'); badge.textContent = 'rung ' + r.rung; }
+    else {
+      badge.classList.add(r.played ? 'played' : 'solved');
+      // "~" and a dotted rule: the number is real and usable, but it is a ceiling
+      // rather than the answer, and it must not read like one.
+      if (r.bound) badge.classList.add('bound');
+      badge.textContent = 'rung ' + (r.bound ? '\u2264' : '') + r.rung;
+    }
     top.appendChild(nm); top.appendChild(badge);
     d.appendChild(top);
     const tags = document.createElement('div'); tags.className = 'tags';
@@ -974,6 +1123,9 @@ function buildModuleList() {
             m.handPlay.minRung + ') is BELOW the solved rung (' + m.solve.minRung +
             '). That is a physics bug, not a difficulty correction. Re-run solve-module.js.'
         : r.played ? '\nrung ' + r.rung + ', hand-played in the real game.'
+        : r.bound ? '\nrung ' + r.rung + ' AT MOST -- the negative that decided it came from a ' +
+            'beamed search that had discarded states, so it may be clearable lower down. Safe ' +
+            'to build with, but it is an estimate. A hand-test settles it.'
         : '\nrung ' + r.rung + ' -- solved only: physically possible, never played by a person.') +
       '\n\nClick to pick it up, then click the canvas to place it.';
     d.dataset.module = m.name;
@@ -995,6 +1147,40 @@ function buildModuleList() {
       hp.onclick = (e) => { e.stopPropagation(); handTest(m); };
       d.appendChild(hp);
     }
+    /*
+     * Open it on its own. Offered on every module, solved or not: a module with no
+     * record is exactly the one most likely to still need work.
+     */
+    const ed = document.createElement('button');
+    ed.className = 'ex';
+    ed.textContent = 'edit';
+    ed.title = 'Open "' + m.name + '" on its own canvas, with its name, tags, entry and exit ' +
+      'already filled in. Saving takes the whole canvas, so there is no selection to get wrong.';
+    ed.onclick = (e) => { e.stopPropagation(); editModule(m); };
+    d.appendChild(ed);
+
+    /*
+     * The one-click action for the queue a row is in.
+     *
+     * Only for unsolved and conflict: hand-testing already has its own button
+     * below, and re-solving is the only thing the editor can do about either of
+     * these on its own. A conflict re-solve is the RIGHT move too -- the usual
+     * cause is that the simulator has been corrected since the verdict was
+     * recorded, and re-running is what finds out.
+     */
+    const q = moduleQueue(m);
+    if (io.solveModule && (q === 'unsolved' || q === 'conflict') && !solving.has(m.name)) {
+      const sv = document.createElement('button');
+      sv.className = 'act';
+      sv.textContent = q === 'conflict' ? 're-solve' : 'solve';
+      sv.title = q === 'conflict'
+        ? 'Run the solver again. A hand-play below the solved rung usually means the simulator ' +
+          'has been corrected since, and this is what finds out.'
+        : 'Run solve-module.js over this module and write the rung into its file.';
+      sv.onclick = (e) => { e.stopPropagation(); runSolver(m.name); };
+      d.appendChild(sv);
+    }
+
     if (io.exportModule) {
       const ex = document.createElement('button');
       ex.className = 'ex'; ex.textContent = 'export';
@@ -1003,6 +1189,102 @@ function buildModuleList() {
     }
     el.appendChild(d);
   }
+}
+
+/*
+ * Play the whole queue in one sitting.
+ *
+ * Hand-playing is the expensive half of grading a module -- it is a person's
+ * time -- and the loop was: pick a row, play, come back to the panel, find the
+ * next row, play. The middle step is pure overhead, and worse, it is where a
+ * session stops. So the play page is handed the REST of the queue and walks it
+ * itself; the editor is not visited again until the queue is empty.
+ *
+ * The order is the panel's own order, which is by rung: easiest first. That is
+ * the right way round for a person -- the early ones warm up the hands and the
+ * hard ones come when the module set is already familiar.
+ */
+function handTestQueue() {
+  const wait = [...moduleLib]
+    .filter((m) => { const q = moduleQueue(m); return q === 'unplayed' || q === 'bound'; })
+    .sort((a, b) => (moduleRung(a).rung || 0) - (moduleRung(b).rung || 0));
+  if (!wait.length) return;
+  handTest(wait[0], wait.slice(1).map((m) => m.name));
+}
+
+/*
+ * ------------------------------------------------- editing a module directly
+ *
+ * A module used to be authored by dropping it into some map, editing it there,
+ * marqueeing it back up and saving it over itself. Four steps, and three of them
+ * are chances to get the bounding box wrong -- catch one platform too few and the
+ * module silently loses a wall; catch one object too many and it gains a piece of
+ * whatever map it was borrowing. Either way the geometry hash moves, the solve
+ * record and the hand-play verdict are dropped, and the only sign is a badge
+ * going grey.
+ *
+ * So: open the module on its own. The canvas holds the module and nothing else,
+ * the save dialog is already open and already filled in with its name, tags,
+ * entry and exit, and saving takes EVERYTHING on the canvas -- there is no
+ * selection to get wrong, because there is nothing else there to select.
+ *
+ * Deliberately not the solved arena. solver/arena.js's box is what the module is
+ * GRADED in and it is built fresh by solve-module.js every time; editing inside a
+ * copy of it would put its walls and ledges on the canvas as objects, and the
+ * first save would swallow them into the module. The arena stays where it
+ * belongs, behind the hand-test button.
+ */
+function editModule(m) {
+  if (!m || !Array.isArray(m.objects) || !m.objects.length) return;
+  /*
+   * Losing an unsaved map to a click on a library row would be a bad trade for
+   * the convenience. The editor persists per-map sessions to local storage, so
+   * this is recoverable, but "recoverable" is not "expected".
+   */
+  if (map.objects.length && !confirm(
+      'Open module "' + m.name + '" on its own?\n\nThe canvas is replaced by the module. ' +
+      'The map you have open is saved in this browser and comes back when you open it again.')) {
+    return;
+  }
+  closeModuleDialog();
+  map = blankMap();
+  map.meta.id = '';
+  map.meta.name = 'module: ' + m.name;
+  sel = []; undoStack = []; redoStack = []; clipboard = [];
+  $('mapName').value = map.meta.name;
+  $('mapList').value = '';
+  // At the origin, which is where a module's own coordinates already are: what is
+  // on screen then matches the numbers in the file, and the entry/exit markers
+  // land where the file says rather than wherever the mouse happened to be.
+  const made = pasteObjects(m.objects, { x: 0, y: 0 });
+  /*
+   * Nothing selected. pasteObjects leaves what it dropped selected, which is
+   * right for a paste and wrong here: the module is not a thing that was just
+   * pasted into a map, it is the map. Leaving it selected means the first arrow
+   * key nudges the entire module off its own origin, and the first drawing tool
+   * click is swallowed committing a selection nobody made.
+   */
+  sel = [];
+  setTool('select');
+  fitView();
+  refresh();
+  modDialog = {
+    name: m.name,
+    tags: (m.tags || []).join(', '),
+    entry: { ...m.entry },
+    exit: { ...m.exit },
+    ids: made.map((o) => o.id),
+    /*
+     * Editing takes the whole canvas, not the ids recorded above. Anything drawn
+     * from here on is part of the module -- that is the point of opening it on
+     * its own -- and a list of ids captured at open time would quietly leave every
+     * new object out of the save.
+     */
+    whole: true,
+    solve: true,
+    tagsTouched: true,   // they came from the module; do not re-adopt over them
+  };
+  renderModuleDialog();
 }
 
 /*
@@ -1045,8 +1327,17 @@ function renderModuleDialog() {
    */
   el.style.display = 'block';
   el.innerHTML = '';
-  const h = document.createElement('h3'); h.textContent = 'Save as module';
+  const h = document.createElement('h3');
+  h.textContent = modDialog.whole ? 'Editing module' : 'Save as module';
   el.appendChild(h);
+  if (modDialog.whole) {
+    const n = document.createElement('div');
+    n.className = 'note';
+    n.textContent = 'The canvas is this module and nothing else, so saving takes all of it -- ' +
+      'anything you add here becomes part of the module. Close the dialog to go back to ' +
+      'ordinary map editing without saving.';
+    el.appendChild(n);
+  }
 
   const row = (label, value, set) => {
     const r = document.createElement('div'); r.className = 'row2';
@@ -1174,7 +1465,11 @@ const moduleName = (s) => String(s || '').trim().toLowerCase()
 
 function pendingModuleRecord() {
   if (!modDialog) return null;
-  const list = modDialog.ids.map(byId).filter(Boolean);
+  // `whole` is module-first editing: the canvas IS the module, so the record is
+  // everything on it. Otherwise it is the selection the dialog was opened over.
+  const list = modDialog.whole
+    ? map.objects.slice()
+    : modDialog.ids.map(byId).filter(Boolean);
   if (!list.length) return null;
   const tags = modDialog.tags.split(',').map((t) => t.trim()).filter(Boolean);
   return buildModuleRecord(moduleName(modDialog.name), tags, list, modDialog.entry, modDialog.exit);
@@ -1310,6 +1605,132 @@ const K = (o) => KINDS[o.kind];
 const byId = (id) => map.objects.find((o) => o.id === id);
 const selected = () => sel.map(byId).filter(Boolean);
 const snap = (v) => grid ? Math.round(v / grid) * grid : Math.round(v);
+
+/*
+ * ------------------------------------------------------------------ grid paint
+ *
+ * Building a room out of single clicks is the reason authoring a module takes an
+ * afternoon: a corridor floor is thirty platforms, and each one is a click, a
+ * drag, a squint at the HUD and a nudge. Paint mode turns the same work into one
+ * stroke -- every grid cell the cursor enters gets exactly one stamp of whatever
+ * tool is armed, aligned to the cell by construction rather than by aim.
+ *
+ * Three rules, and each of them is what makes the stroke usable rather than a
+ * mess to clean up afterwards:
+ *
+ *   SNAPPED       a stamp fills its cell exactly. Not "snapped to the nearest
+ *                 grid line" -- that still lets two stamps sit a cell apart with
+ *                 a hairline between them, and a hairline in a platform run is a
+ *                 hole Johnny falls through.
+ *   NEVER DOUBLED a cell that already holds this kind is skipped, so dragging
+ *                 back over your own stroke is free and the shaky part of a fast
+ *                 drag does not stack forty platforms in one cell.
+ *   ONE UNDO      the whole stroke is a single history entry. A stroke that
+ *                 undoes cell by cell is worse than no undo at all.
+ *
+ * Paint needs a grid, because a cell is the unit it works in. Selecting `free`
+ * turns it off rather than guessing a size.
+ */
+
+/*
+ * What can be painted: the kinds a room is BUILT out of.
+ *
+ * Excluded on purpose rather than by omission --
+ *   single kinds (spawn, gun, boss gate, boss arena) exist once per map, so a
+ *     stroke of them is a stroke of one object being dragged about;
+ *   lasers are beams, whose whole geometry is the two ends, and a beam squeezed
+ *     into one cell is not a laser;
+ *   camera areas and doors are placed against the shape of a room, one at a
+ *     time, and painting a row of them has no meaning.
+ */
+const PAINTABLE = ['plat', 'art', 'spike', 'coin', 'ene', 'bomb', 'platMove'];
+const canPaint = () => paint && grid > 0 && PAINTABLE.includes(tool);
+
+const cellOf = (w) => ({ cx: Math.floor(w.x / grid), cy: Math.floor(w.y / grid) });
+const cellKey = (c) => c.cx + ',' + c.cy;
+
+/*
+ * Fit a texture inside one grid cell WITHOUT stretching it.
+ *
+ * The tiles are cut from the game's own artwork at their own aspect ratios, so
+ * forcing one into a square cell is the difference between a wall that looks
+ * like the game and a wall that looks like the game seen through a funhouse
+ * mirror. Letterbox: scale by the tighter of the two axes, then centre the
+ * remainder. Never scales up past 1 either -- a tile smaller than the cell stays
+ * its own size rather than being blown up into a blur.
+ */
+function fitTile(tw, th, cell) {
+  const f = Math.min(cell / tw, cell / th, 1);
+  const w = Math.round(tw * f), h = Math.round(th * f);
+  return { w, h, dx: Math.round((cell - w) / 2), dy: Math.round((cell - h) / 2) };
+}
+
+/*
+ * Does this cell already hold one of these?
+ *
+ * By the cell's CENTRE rather than by an overlap test: a painted stamp fills its
+ * cell, so its centre is inside exactly one cell and the test is exact for
+ * anything the stroke itself laid down. For an object that was placed by hand
+ * and happens to cross the cell, containing the centre is still the right
+ * question -- painting over the middle of an existing platform should be a
+ * no-op, painting over its edge should not.
+ */
+function cellOccupied(cx, cy, kind) {
+  const mx = cx * grid + grid / 2, my = cy * grid + grid / 2;
+  return map.objects.some((o) => {
+    if (o.kind !== kind) return false;
+    const b = bounds(o);
+    return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+  });
+}
+
+/** One stamp, filling cell (cx, cy). Returns the object, or null if the cell was taken. */
+function stampCell(cx, cy) {
+  if (cellOccupied(cx, cy, tool)) return null;
+  const k = KINDS[tool];
+  const x = cx * grid, y = cy * grid;
+  const o = { id: nextId++, kind: tool, x, y, w: 0, h: 0, ...(k.props || {}) };
+  if (tool === 'art') {
+    if (!selTile) return null;
+    const f = fitTile(selTile.w, selTile.h, grid);
+    o.x = x + f.dx; o.y = y + f.dy; o.w = f.w; o.h = f.h;
+    o.tile = selTile.name;
+    o.rot = artStyle.rot; o.flipX = artStyle.flipX; o.flipY = artStyle.flipY;
+  } else if (k.shape === 'point') {
+    // A point kind has no size of its own, so it goes to the middle of the cell.
+    o.x = x + grid / 2; o.y = y + grid / 2;
+  } else {
+    o.w = grid; o.h = grid;
+  }
+  if (k.path) { o.xmin = o.x; o.xmax = o.x; o.ymin = o.y; o.ymax = o.y; }
+  map.objects.push(o);
+  return o;
+}
+
+/** Stamp every cell of the stroke the cursor has newly entered. */
+function paintAt(d, w) {
+  const c = cellOf(w);
+  const key = cellKey(c);
+  if (d.done.has(key)) return false;
+  d.done.add(key);
+  const o = stampCell(c.cx, c.cy);
+  if (o) d.made.push(o.id);
+  return !!o;
+}
+
+function setPaint(v) {
+  // Free means there are no cells, so there is nothing to paint into.
+  paint = !!v && grid > 0;
+  const el = $('paint');
+  if (el) {
+    el.classList.toggle('on', paint);
+    el.disabled = !grid;
+    el.title = grid
+      ? 'Paint mode: drag and every ' + grid + 'px cell the cursor enters gets one stamp of the ' +
+        'armed tool. Never doubles up, and the whole stroke is one undo. Key p.'
+      : 'Paint mode needs a grid -- pick a cell size above free first. Key p.';
+  }
+}
 const toWorld = (sx, sy) => ({ x:(sx - view.x) / view.z, y:(sy - view.y) / view.z });
 
 /*
@@ -2072,6 +2493,29 @@ function onMouseDown(e) {
   // canvas -- they routinely sit exactly on a platform corner
   const mm = spaceDown ? null : modMarkerAt(p.x, p.y);
   if (mm) { dragging = { modPt: mm }; return; }
+  /*
+   * A paint stroke owns the drag outright, ahead of the handles and ahead of the
+   * "a click on the live selection moves it" rule.
+   *
+   * Both of those would otherwise eat the second stroke of every session. A
+   * finished stroke selects what it made, so its group handles sit exactly along
+   * the edge of what was just painted -- which is where the next stroke starts.
+   * Grabbing one of those and stretching the last run of platforms across the
+   * room is not a plausible thing to have meant by a drag in paint mode.
+   *
+   * Paint is a MODE, so this is the price of it being one: while it is on, the
+   * canvas paints and nothing else. Press p, or the toolbar button, to get the
+   * ordinary tools back.
+   */
+  if (canPaint() && !spaceDown && !e.ctrlKey && !e.metaKey && !e.altKey && e.button === 0) {
+    pushHistory();          // once, for the whole stroke
+    sel = [];
+    dragging = { paint: true, done: new Set(), made: [] };
+    paintAt(dragging, w);
+    refresh();
+    return;
+  }
+
   const h = spaceDown ? null : handleAt(p.x, p.y);
   if (h) {
     armHistory();
@@ -2159,7 +2603,23 @@ function startCreate(w) {
   const o = { id:nextId++, kind:tool, x:snap(w.x), y:snap(w.y), w:0, h:0, ...(k.props||{}) };
   if (tool === 'art') {
     if (!selTile) return;
-    o.tile = selTile.name; o.w = selTile.w; o.h = selTile.h;
+    /*
+     * On a grid, a stamped texture fills one cell -- letterboxed, never
+     * stretched. Off the grid it lands at its own pixel size, which is what
+     * `free` means everywhere else in the editor.
+     *
+     * This is the same rule paint uses, and it is here as well because most
+     * texturing is single clicks: a tile dropped at its native 512px next to a
+     * 100px grid is a tile that has to be resized by hand every single time.
+     */
+    if (grid) {
+      const f = fitTile(selTile.w, selTile.h, grid);
+      o.x = snap(w.x - grid / 2) + f.dx; o.y = snap(w.y - grid / 2) + f.dy;
+      o.w = f.w; o.h = f.h;
+    } else {
+      o.w = selTile.w; o.h = selTile.h;
+    }
+    o.tile = selTile.name;
     o.rot = artStyle.rot; o.flipX = artStyle.flipX; o.flipY = artStyle.flipY;
   }
   if (k.shape === 'point' || k.shape === 'beam') { o.w = 0; o.h = 0; }
@@ -2189,6 +2649,8 @@ function onMouseMove(e) {
   } else if (dragging.pan) {
     view.x = dragging.vx + (p.x - dragging.sx);
     view.y = dragging.vy + (p.y - dragging.sy);
+  } else if (dragging.paint) {
+    if (paintAt(dragging, w)) refreshObjs();
   } else if (dragging.marquee) {
     dragging.x1 = w.x; dragging.y1 = w.y;
   } else if (dragging.create) {
@@ -2264,6 +2726,13 @@ function groupDrag(d, w, shift) {
 
 function onMouseUp() {
   pendingHistory = null;
+  /*
+   * A finished stroke selects what it made, so the whole run can be nudged,
+   * retagged or saved as a module without marqueeing it back up by hand. A
+   * stroke that painted nothing -- every cell was already taken -- leaves the
+   * selection alone rather than clearing it.
+   */
+  if (dragging?.paint && dragging.made.length) sel = dragging.made.slice();
   if (dragging?.create) { const o = dragging.create; if (o.w < 2 || o.h < 2) { o.w = grid||40; o.h = grid||40; } }
   if (dragging?.marquee) {
     const m = dragging;
@@ -2364,6 +2833,7 @@ function onKeyDown(e) {
   }
   else if (e.key === '[') { if(!e.repeat) pushHistory(); s.forEach((o)=>{ o.z = (o.z||0) - 1; if(o.kind==='art') artStyle.z = o.z; }); refresh(); }
   else if (e.key === ']') { if(!e.repeat) pushHistory(); s.forEach((o)=>{ o.z = (o.z||0) + 1; if(o.kind==='art') artStyle.z = o.z; }); refresh(); }
+  else if (e.key === 'p') { setPaint(!paint); schedulePersist(); }
   else if (e.key === 'x') { pushHistory(); s.forEach((o)=>{ if(o.kind==='art') { o.flipX = o.flipX?0:1; artStyle.flipX = o.flipX; } }); refresh(); }
   else if (e.key === 'y') { pushHistory(); s.forEach((o)=>{ if(o.kind==='art') { o.flipY = o.flipY?0:1; artStyle.flipY = o.flipY; } }); refresh(); }
   else if (e.key === 'r' && s.length) {
@@ -2790,6 +3260,9 @@ function setGrid(v) {
   grid = Number(v) || 0;
   const el = $('grid');
   if (el) el.value = String(grid);
+  // Paint works in cells; `free` has none. Re-run the toggle rather than clearing
+  // the flag, so the button's enabled state and tooltip follow the grid too.
+  setPaint(paint);
 }
 
 function persistState() {
@@ -2799,6 +3272,7 @@ function persistState() {
       objects: map.objects,
       nextId,
       grid,
+      paint,
       name: map.meta.name,
       undo: undoStack.slice(-SAVED_HISTORY),
       redo: redoStack.slice(-SAVED_HISTORY),
@@ -2819,6 +3293,7 @@ function restoreState(id) {
     // grid is a per-map working preference, not part of the map itself, so it
     // lives with the session rather than in the saved file
     if (typeof d.grid === 'number') setGrid(d.grid);
+    if (typeof d.paint === 'boolean') setPaint(d.paint);
     undoStack = d.undo || [];
     redoStack = d.redo || [];
     return true;
@@ -2907,6 +3382,7 @@ async function boot() {
   } else van.style.display = 'none';
 
   $('grid').onchange = (e) => { setGrid(Number(e.target.value)); schedulePersist(); };
+  $('paint').onclick = () => { setPaint(!paint); schedulePersist(); };
   $('fit').onclick = fitView;
   $('artTop').onclick = (e) => {
     artOnTop = !artOnTop;
@@ -3074,14 +3550,14 @@ function mount(opts) {
  */
 return {
   mount, KINDS,
-  _geom: { rotate90, scaleObj, rotateSelection, clampBox, laserRect, groupBox, moveObjects, bounds },
+  _geom: { rotate90, scaleObj, rotateSelection, clampBox, laserRect, groupBox, moveObjects, bounds, fitTile },
   /*
    * The module half, exported for the same reason: a module that does not survive
    * a trip through the editor loses its solve record and its hand-play verdict,
    * and nothing on screen would say so. tools/test-geometry.js round-trips the
    * whole library through these.
    */
-  _module: { canonical, geomKey, moduleRung, deriveEnds, stripModuleObject,
+  _module: { canonical, geomKey, moduleRung, moduleQueue, deriveEnds, stripModuleObject,
              buildModuleRecord, mergeModule, MODULE_OPTIONAL },
   /*
    * The ability model, exported so test-geometry.js can hold it against the real
@@ -3093,7 +3569,8 @@ return {
   // read-only view of the live state, for driving the editor from a test page:
   // handle positions are in world space and the tests need the same transform
   // the canvas uses, which no amount of reading the panels recovers exactly
-  _state: () => ({ view, grid, tool, sel: sel.slice(), objects: map.objects, meta: map.meta,
+  _state: () => ({ view, grid, paint, tool, sel: sel.slice(), objects: map.objects, meta: map.meta,
+                   filter: modFilter,
                    modules: moduleLib, armed: pendingModule, dialog: modDialog, handleAt, bounds }),
 };
 }));

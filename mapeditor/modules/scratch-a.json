@@ -1,0 +1,252 @@
+{
+ "name": "scratch-a",
+ "version": 1,
+ "tags": [],
+ "objects": [
+  {
+   "kind": "plat",
+   "x": 0,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 10,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 20,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 30,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 40,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 50,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 60,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 70,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 80,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 90,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 100,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 110,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 120,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 130,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 140,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 150,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 160,
+   "y": 50,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 170,
+   "y": 40,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 180,
+   "y": 40,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 190,
+   "y": 40,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 200,
+   "y": 40,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 210,
+   "y": 40,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 220,
+   "y": 40,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 220,
+   "y": 30,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 230,
+   "y": 30,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 230,
+   "y": 20,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 240,
+   "y": 10,
+   "w": 10,
+   "h": 10
+  },
+  {
+   "kind": "plat",
+   "x": 240,
+   "y": 0,
+   "w": 10,
+   "h": 10
+  }
+ ],
+ "size": {
+  "w": 250,
+  "h": 60
+ },
+ "entry": {
+  "x": 0,
+  "y": 50
+ },
+ "exit": {
+  "x": 250,
+  "y": 0
+ },
+ "solve": {
+  "hash": "2e304373fd0f",
+  "settings": {
+   "physicsRev": 3,
+   "recoilBoost": false,
+   "knockbackBoost": false,
+   "stride": 4,
+   "qPos": 6,
+   "qVx": 1,
+   "qVy": 1,
+   "phaseMod": 100,
+   "phaseBucket": 10,
+   "hazardPad": 120,
+   "beamCell": 16,
+   "beamCap": 64,
+   "maxFrames": 9000,
+   "hashBits": 25
+  },
+  "minRung": 2,
+  "combo": {
+   "spdTier": 1,
+   "jmpTier": 1,
+   "doubleJump": false,
+   "energyTier": 1,
+   "ammoTier": 0
+  },
+  "frames": 151,
+  "arena": "mapeditor/maps/module-scratch-a.json",
+  "solvedAt": "2026-08-28"
+ },
+ "handPlay": {
+  "hash": "fa0d7ff9f665",
+  "playedAt": "2026-08-28",
+  "minRung": 2,
+  "why": "Played the arena at rung 2 (2 spd1/jmp1/dj0/e1/ammo0) and cleared it on attempt 1.",
+  "attempts": 1
+ }
+}

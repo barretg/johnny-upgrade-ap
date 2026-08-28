@@ -95,10 +95,32 @@ for (const f of fs.readdirSync(MODDIR).filter((n) => n.endsWith('.json'))) {
 
 // a hand-play verdict raises the rung; it never lowers it, and a verdict below the
 // solved rung is a physics bug rather than a difficulty correction
-eq(mod.moduleRung({ solve:{minRung:12} }), { rung:12, played:false, conflict:false }, 'rung: solved only');
-eq(mod.moduleRung({ solve:{minRung:12}, handPlay:{minRung:22} }), { rung:22, played:true, conflict:false }, 'rung: hand-play raises');
-eq(mod.moduleRung({ solve:{minRung:12}, handPlay:{minRung:5} }), { rung:12, played:true, conflict:true }, 'rung: hand-play below solve is a conflict, not a lowering');
-eq(mod.moduleRung({}), { rung:null, played:false, conflict:false }, 'rung: unsolved');
+eq(mod.moduleRung({ solve:{minRung:12} }), { rung:12, played:false, conflict:false, bound:false }, 'rung: solved only');
+eq(mod.moduleRung({ solve:{minRung:12}, handPlay:{minRung:22} }), { rung:22, played:true, conflict:false, bound:false }, 'rung: hand-play raises');
+eq(mod.moduleRung({ solve:{minRung:12}, handPlay:{minRung:5} }), { rung:12, played:true, conflict:true, bound:false }, 'rung: hand-play below solve is a conflict, not a lowering');
+eq(mod.moduleRung({}), { rung:null, played:false, conflict:false, bound:false }, 'rung: unsolved');
+
+/*
+ * An UPPER BOUND is a different claim from a solved rung, and the panel has to be
+ * able to tell them apart.
+ *
+ * solve.exact === false means the negative that decided the rung came from a
+ * beamed search that had thrown states away, so the module may be clearable lower
+ * down. crusher-gate and gap-wide are both in that state in the shipped library.
+ * A hand-play verdict retires it: a person clearing the module is a fact about
+ * the game rather than about the beam.
+ */
+eq(mod.moduleRung({ solve:{minRung:17, exact:false} }),
+   { rung:17, played:false, conflict:false, bound:true }, 'rung: a beamed negative is an upper bound');
+eq(mod.moduleRung({ solve:{minRung:17, exact:false}, handPlay:{minRung:17} }),
+   { rung:17, played:true, conflict:false, bound:false }, 'rung: and a hand-play settles it');
+
+// which queue a module is waiting in, which is what the panel's chips count
+eq(mod.moduleQueue({}), 'unsolved', 'queue: no record at all');
+eq(mod.moduleQueue({ solve:{minRung:12} }), 'unplayed', 'queue: solved, never played');
+eq(mod.moduleQueue({ solve:{minRung:12, exact:false} }), 'bound', 'queue: an upper bound outranks unplayed');
+eq(mod.moduleQueue({ solve:{minRung:12}, handPlay:{minRung:5} }), 'conflict', 'queue: a verdict below the solve');
+eq(mod.moduleQueue({ solve:{minRung:12}, handPlay:{minRung:14} }), null, 'queue: solved and played needs nothing');
 
 // default-valued flags are stripped, real numbers are not
 eq(mod.stripModuleObject({ id:3, kind:'plat', x:0, y:0, w:10, h:10, semi:0, stomper:0, z:2 }),
