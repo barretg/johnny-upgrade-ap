@@ -72,16 +72,23 @@
    "maxFrames": 9000,
    "hashBits": 25
   },
-  "minRung": 12,
+  "minRung": 6,
   "combo": {
-   "spdTier": 4,
-   "jmpTier": 4,
-   "doubleJump": true,
+   "spdTier": 3,
+   "jmpTier": 2,
+   "doubleJump": false,
    "energyTier": 2,
-   "ammoTier": 1
+   "ammoTier": 0
   },
-  "frames": 436,
+  "frames": 528,
   "arena": "mapeditor/maps/module-robot-single.json",
-  "solvedAt": "2026-08-27"
+  "solvedAt": "2026-08-28"
+ },
+ "handPlay": {
+  "hash": "0a2774c7dfa0",
+  "playedAt": "2026-08-28",
+  "minRung": 6,
+  "why": "Played the arena at rung 6 (6 spd3/jmp2/dj0/e2/ammo0) and cleared it on attempt 1.",
+  "attempts": 1
  }
 }

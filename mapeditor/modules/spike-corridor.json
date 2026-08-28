@@ -75,6 +75,13 @@
   },
   "frames": 310,
   "arena": "mapeditor/maps/module-spike-corridor.json",
-  "solvedAt": "2026-08-27"
+  "solvedAt": "2026-08-28"
+ },
+ "handPlay": {
+  "hash": "ddb3c932a54b",
+  "playedAt": "2026-08-28",
+  "minRung": 12,
+  "why": "Played the arena at rung 12 (12 spd4/jmp4/dj1/e2/ammo1) and cleared it on attempt 1.",
+  "attempts": 1
  }
 }

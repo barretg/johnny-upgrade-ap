@@ -14,10 +14,15 @@
 //
 // The rules inherited from the rest of the solver, none of which are relaxed here:
 //
-//   * Only a run that EXHAUSTED its state space (complete) may say a rung is insufficient. A run
-//     that hit its frame cap or filled its visited set proves nothing, and is reported as
-//     unknown rather than guessed in either direction -- guessing "clears" is the direction that
-//     produces an unbeatable map.
+//   * Only a run that EXHAUSTED its state space may say a rung is insufficient. A run that hit
+//     its frame cap or filled its visited set proves nothing, and is reported as unknown rather
+//     than guessed in either direction -- guessing "clears" is the direction that produces an
+//     unbeatable map.
+//     `complete: true` alone is NOT that guarantee: beamCap discards states, and a frontier that
+//     empties after states were thrown away has not exhausted anything. So a negative is escalated
+//     through wider beams until it is either exhausted with nothing discarded (a proof), or the
+//     search starts truncating -- in which case the best complete-but-beamed answer is kept and
+//     the record is marked `exact: false`, meaning the rung is an UPPER BOUND.
 //   * settings.js is part of the answer. A solve record made under different settings is stale.
 //   * The module's own objects are part of the answer too. Edit the geometry and the record is
 //     dropped, because stale difficulty metadata is the one thing that can silently generate an
@@ -479,8 +484,8 @@ async function main() {
         ` expect=${expected === null ? '-' : expected}` +
         ` frames=${res.frames === null ? '-' : res.frames}` +
         ` probes=${res.probed.length} ${seconds.toFixed(1)}s  ${verdict}` +
-        (res.exact === false ? '  [UPPER BOUND: a beamed negative decided it; re-run without ' +
-          '--fast to settle]' : '') + `${handNote}${roofNote}`
+        (res.exact === false ? '  [UPPER BOUND: the decisive negative still had the beam ' +
+          'discarding states, so this rung may be higher than the truth]' : '') + `${handNote}${roofNote}`
     );
 
     if (args.flags.write && res.minRung !== null) {

@@ -95,6 +95,13 @@
   },
   "frames": 436,
   "arena": "mapeditor/maps/module-robot-pair.json",
-  "solvedAt": "2026-08-27"
+  "solvedAt": "2026-08-28"
+ },
+ "handPlay": {
+  "hash": "ebe6f1045f3d",
+  "playedAt": "2026-08-28",
+  "minRung": 12,
+  "why": "Played the arena at rung 12 (12 spd4/jmp4/dj1/e2/ammo1) and cleared it on attempt 1.",
+  "attempts": 1
  }
 }

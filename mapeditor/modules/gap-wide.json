@@ -58,6 +58,7 @@
    "hashBits": 25
   },
   "minRung": 20,
+  "exact": false,
   "combo": {
    "spdTier": 7,
    "jmpTier": 6,
@@ -67,7 +68,7 @@
   },
   "frames": 256,
   "arena": "mapeditor/maps/module-gap-wide.json",
-  "solvedAt": "2026-08-27"
+  "solvedAt": "2026-08-28"
  },
  "handPlay": {
   "hash": "23dacad30702",
