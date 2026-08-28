@@ -5,6 +5,7 @@
 //   node solve-module.js --write                  # ...and store the answer in the module file
 //   node solve-module.js --keep-arenas            # leave the arenas in mapeditor/maps/
 //   node solve-module.js --fast                   # trust the beam; rungs become upper bounds
+//   node solve-module.js --jobs 4                 # four modules at once (memory is the ceiling)
 //
 // This is the cheap half of the "generate from known difficulty" idea. A full atlas sweep is
 // hours times a dozen workers because it answers every combo against the whole map; a module is
@@ -313,7 +314,7 @@ function parseArgs(argv) {
   return a;
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv);
 
   if (args.flags.arena) {
@@ -326,7 +327,7 @@ function main() {
   // the process. settings.js is safe: with JU_MAP unset it reads no map.
   const SETTINGS = require('./settings');
   const { buildArena } = require('./arena');
-  const { spawnSync } = require('child_process');
+  const { spawn } = require('child_process');
 
   let files = args.files;
   if (!files.length) {
@@ -350,7 +351,26 @@ function main() {
   let unknowns = 0;
   let unplayed = 0;
 
-  for (const file of files) {
+  /*
+   * How many modules to solve at once.
+   *
+   * Each module is already its own process -- fastsim derives its world from JU_MAP at require()
+   * time, so one process can only ever solve one map -- which makes solving several at once free
+   * of any coordination. Nothing is shared: each has its own arena file and writes only its own
+   * module file.
+   *
+   * Within a module there is nothing to parallelise. findMinRung is a binary search, so each
+   * probe decides which rung to try next; running them at once would mean running rungs nobody
+   * needs.
+   *
+   * THE LIMIT IS MEMORY, NOT CORES. An unbeamed negative can hold tens of millions of states --
+   * gap-wide's reaches 24M -- so each child gets a 6GB heap and four of them can genuinely
+   * exhaust a machine. Sequential stays the default for that reason: raise it deliberately, and
+   * lower it again if a run dies instead of answering.
+   */
+  const jobs = Math.max(1, Number(args.flags.jobs) || 1);
+
+  const solveOne = (file) => new Promise((resolve) => {
     const mod = readModule(path.resolve(file), SETTINGS);
     const { id, map } = buildArena(mod);
     const arenaPath = path.join(ARENA_DIR, id + '.json');
@@ -358,19 +378,41 @@ function main() {
     fs.writeFileSync(arenaPath, JSON.stringify(map, null, 1));
 
     const t0 = Date.now();
-    const child = spawnSync(
+    const child = spawn(
       process.execPath,
       ['--max-old-space-size=6000', __filename, '--arena', arenaPath]
         .concat(args.flags.fast ? ['--fast'] : []),
-      { cwd: __dirname, env: { ...process.env, JU_MAP: arenaPath }, encoding: 'utf8', maxBuffer: 1 << 24 }
+      { cwd: __dirname, env: { ...process.env, JU_MAP: arenaPath } }
     );
-    if (child.status !== 0) {
-      console.log(`FAIL ${mod.name}: ${(child.stderr || '').trim().split('\n').slice(-4).join(' | ')}`);
+    let out = '', err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('close', (status) =>
+      resolve({ mod, arenaPath, status, out, err, seconds: (Date.now() - t0) / 1000 }));
+  });
+
+  // A pool rather than Promise.all, so --jobs really is a ceiling on concurrent children.
+  /*
+   * Report each module the moment it lands, not at the end.
+   *
+   * Collecting everything and printing it sorted reads better, and it was the first thing tried
+   * -- but an unbeamed negative is minutes long, so a sorted report means a run that prints
+   * nothing at all for ten minutes and then everything at once. Silence is indistinguishable
+   * from a hang. Completion order it is; with --jobs 1 that is library order anyway.
+   */
+  let nextFile = 0;
+  const worker = async () => {
+    while (nextFile < files.length) report(await solveOne(files[nextFile++]));
+  };
+
+  function report(done) {
+    const { mod, arenaPath, seconds } = done;
+    if (done.status !== 0) {
+      console.log(`FAIL ${mod.name}: ${(done.err || '').trim().split('\n').slice(-4).join(' | ')}`);
       process.exitCode = 1;
-      continue;
+      return;
     }
-    const res = JSON.parse(child.stdout);
-    const seconds = (Date.now() - t0) / 1000;
+    const res = JSON.parse(done.out);
 
     const roof = roofRung(mod, require('./ladder'));
     const expected = mod.expect && typeof mod.expect.minRung === 'number' ? mod.expect.minRung : null;
@@ -470,6 +512,8 @@ function main() {
     }
   }
 
+  await Promise.all(Array.from({ length: Math.min(jobs, files.length) }, worker));
+
   if (disagreements || unknowns) {
     console.log(
       `\n${disagreements} disagreement(s), ${unknowns} unknown(s), ${unplayed} not hand-played`
@@ -486,7 +530,12 @@ function main() {
   }
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+  main().catch((e) => {
+    console.error(e && e.stack ? e.stack : String(e));
+    process.exitCode = 1;
+  });
+}
 
 module.exports = {
   roofRung,
