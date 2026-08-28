@@ -360,6 +360,34 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, name });
     }
 
+    /*
+     * Deleting a module takes its arena with it.
+     *
+     * The arena is derived -- rebuilt from the module on every hand-test -- so an
+     * arena left behind is a playable map of geometry that no longer exists in the
+     * library, sitting in the map list under a name that says it belongs to a
+     * module. The solve and hand-play records live INSIDE the module file, so they
+     * go with it; that is the part worth being sure about, since geometry can be
+     * redrawn and a hand-play verdict is a person's time.
+     */
+    if (req.method === 'DELETE' && p.startsWith('/api/module/')) {
+      const name = p.slice('/api/module/'.length);
+      if (!safeId(name)) return json(res, 400, { error: 'bad module name' });
+      const file = path.join(MODULES, name + '.json');
+      if (!fs.existsSync(file)) return json(res, 404, { error: 'no such module' });
+      const played = (() => {
+        try { return !!JSON.parse(fs.readFileSync(file, 'utf8')).handPlay; } catch (e) { return false; }
+      })();
+      fs.unlinkSync(file);
+      const arena = 'module-' + name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+      for (const f of [arena + '.json', arena + '.png']) {
+        const a = path.join(MAPS, f);
+        if (fs.existsSync(a)) fs.unlinkSync(a);
+      }
+      console.log('deleted module ' + name + (played ? ' (INCLUDING its hand-play verdict)' : ''));
+      return json(res, 200, { ok: true, name });
+    }
+
     if (p === '/api/modules') return json(res, 200, listModules());
 
     if (req.method === 'POST' && p.startsWith('/api/arena/')) {

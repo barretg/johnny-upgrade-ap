@@ -194,6 +194,13 @@
         return writeModules(list) ? { ok: true, name } : { ok: false };
       },
 
+      // no arena to clean up on this side: the userscript cannot build one,
+      // because building one is node
+      deleteModule(name) {
+        const list = readModules().filter((m) => m.name !== name);
+        return writeModules(list) ? { ok: true, name } : { ok: false };
+      },
+
       // one indentation apart from the server's writer, deliberately: this is the
       // file that gets dropped into mapeditor/modules/ and solved
       exportModule(name, mod) {

@@ -33,6 +33,8 @@
  *   listModules()              -> the module library, whole records (optional)
  *   saveModule(name, mod)      -> { ok } (optional; the panel needs both)
  *   exportModule(name, mod)    -> hand a module out as a file (optional)
+ *   deleteModule(name)         -> remove it, and anything derived from it
+ *                                 (optional; the trash can hides without it)
  *   solveModule(name)          -> run the solver over a saved module and write the
  *                                 answer into it (optional; node only)
  *   moduleArena(name)          -> build that module's playable arena, -> { ok, id }
@@ -220,6 +222,8 @@ const CSS = `
 #mde-root .sec h2 { font-size:10px; text-transform:uppercase; letter-spacing:.07em; color:var(--dim);
   margin:0 0 7px; font-weight:600; }
 #mde-root .tools { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+#mde-root .drawopt { display:flex; align-items:center; gap:6px; }
+#mde-root .drawopt select { flex:1; }
 #mde-root .tools button { text-align:left; padding:5px 7px; }
 #mde-palette { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
 #mde-root .tile { background:#12141a; border:1px solid var(--line); border-radius:5px; cursor:pointer;
@@ -270,7 +274,11 @@ const CSS = `
  */
 #mde-modlist { display:grid; gap:4px; }
 #mde-root .mod { background:#12141a; border:1px solid var(--line); border-radius:5px;
-  padding:5px 7px; cursor:pointer; display:grid; gap:2px; }
+  padding:5px 7px; cursor:pointer; display:grid; gap:2px; position:relative; }
+/* the one action on a card that cannot be undone, so it sits away from the rest */
+#mde-root .mod .trash { position:absolute; right:4px; bottom:3px; background:none; border:0;
+  color:var(--dim); font-size:11px; line-height:1; padding:1px 3px; cursor:pointer; opacity:.5; }
+#mde-root .mod .trash:hover { opacity:1; color:var(--bad, #e07a7a); }
 #mde-root .mod:hover { border-color:var(--accent); }
 #mde-root .mod.sel { border-color:var(--accent); background:#2b3346; }
 #mde-root .mod .top { display:flex; gap:6px; align-items:baseline; justify-content:space-between; }
@@ -325,7 +333,9 @@ const CSS = `
   width:min(720px, 92%); max-height:82%; overflow:auto; display:none;
   background:#161922f5; border:1px solid var(--line); border-radius:9px; padding:0; }
 #mde-rungs .hd { position:sticky; top:0; background:#1c1f28; border-bottom:1px solid var(--line);
-  padding:9px 12px; display:flex; align-items:baseline; gap:10px; }
+  padding:9px 12px; display:flex; align-items:baseline; gap:10px;
+  cursor:move; user-select:none; }
+#mde-rungs .hd button { cursor:pointer; }
 #mde-rungs .hd h3 { margin:0; font-size:12px; }
 #mde-rungs .hd .mde-sp { flex:1; }
 #mde-rungs table { border-collapse:collapse; width:100%;
@@ -358,17 +368,6 @@ const HTML = `
   <button id="mde-newMap">new</button>
   <button id="mde-fromVanilla">start from vanilla</button>
   <span class="mde-sp"></span>
-  <span class="muted">grid</span>
-  <select id="mde-grid">
-    <option value="0" selected>free</option>
-    <option value="10">10</option>
-    <option value="25">25</option>
-    <option value="50">50</option>
-    <option value="100">100</option>
-  </select>
-  <button id="mde-paint" title="Paint mode. Drag across the canvas and every grid cell the cursor enters gets one stamp of the armed tool, snapped to the cell and never doubled up. The whole stroke is one undo. Needs a grid; key p.">paint</button>
-  <button id="mde-artTop" class="on">textures on top</button>
-  <button id="mde-fit">fit</button>
   <button id="mde-save">save</button>
   <button id="mde-export">export</button>
   <button id="mde-play" class="primary">play</button>
@@ -379,6 +378,30 @@ const HTML = `
   <div class="sec">
     <h2>Tools</h2>
     <div class="tools" id="mde-tools"></div>
+  </div>
+  <!--
+    Grid, paint, fit and the texture layer are TOOL STATE, not view chrome, and
+    they used to sit in the top bar at the far end of the window from the tool
+    buttons they modify. The paint toggle in particular is read constantly while
+    drawing, so it belongs where the eye already is.
+  -->
+  <div class="sec">
+    <h2>Drawing</h2>
+    <div class="drawopt">
+      <span class="muted">grid</span>
+      <select id="mde-grid">
+        <option value="0" selected>free</option>
+        <option value="10">10</option>
+        <option value="25">25</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+    </div>
+    <button id="mde-paint" style="width:100%;margin-top:5px" title="Paint mode. Drag across the canvas and every grid cell the cursor enters gets one stamp, snapped to the cell and never doubled up. With a selection copied, the stamp is that selection instead of the armed tool. Hold shift to lock the stroke to one axis. The whole stroke is one undo. Needs a grid; key p.">paint</button>
+    <div class="tools" style="margin-top:5px">
+      <button id="mde-artTop" class="on">textures on top</button>
+      <button id="mde-fit">fit</button>
+    </div>
   </div>
   <div class="sec">
     <h2>Textures</h2>
@@ -400,10 +423,12 @@ const HTML = `
   <div id="mde-rungs"></div>
   <div id="mde-hud"></div>
   <div id="mde-hint">
-    <div><kbd>ctrl+click</kbd> pick object + its settings</div>
+    <div><kbd>ctrl+click</kbd> add / remove + adopt settings</div>
+    <div><kbd>ctrl+drag</kbd> marquee, adds to the selection</div>
     <div><kbd>ctrl+click</kbd> blank = back to select tool</div>
-    <div><kbd>alt+click</kbd> add / remove from selection</div>
     <div><kbd>drag</kbd> marquee select</div>
+    <div>paint: <kbd>shift</kbd> locks the stroke to one axis</div>
+    <div>paint: a copied selection is the brush</div>
     <div><kbd>corner</kbd> resize &middot; <kbd>space+drag</kbd> pan</div>
     <div>many selected: box resizes &amp; rotates as one</div>
     <div>green handles = door trigger zone</div>
@@ -543,7 +568,7 @@ function paste() {
  * the caller's job, since a module drop wants one entry covering the provenance
  * record as well.
  */
-function pasteObjects(clipboard, at) {
+function pasteObjects(clipboard, at, quiet) {
   const w = at || lastWorld;
   let x0 = Infinity, y0 = Infinity;
   for (const c of clipboard) { x0 = Math.min(x0, c.x); y0 = Math.min(y0, c.y); }
@@ -565,8 +590,10 @@ function pasteObjects(clipboard, at) {
     map.objects.push(o);
     return o;
   });
-  sel = made.map((o) => o.id);
-  refresh();
+  // a paint stroke pastes once per cell and selects the whole run at mouseup,
+  // so it asks for neither of these -- a refresh per stamp is a redraw of the
+  // entire map for every cell of the stroke
+  if (!quiet) { sel = made.map((o) => o.id); refresh(); }
   return made;
 }
 
@@ -904,6 +931,41 @@ function jumpRise(jmp) {
  * question is what solving a module answers, and what Phase 7's traversal probe
  * will answer for two points.
  */
+/*
+ * Drag a floating panel around the stage by its header.
+ *
+ * The rung reference is meant to be read WHILE editing -- "which rung first has
+ * jmp5, and does the ledge I am drawing need it" -- and centred on the stage it
+ * sits over the exact thing being measured. So it moves.
+ *
+ * It starts centred with a translate(-50%,-50%), which cannot be nudged by
+ * setting left/top; the first drag converts it to plain pixel coordinates and
+ * drops the transform. The position then lives on the element, so it survives
+ * closing and reopening the panel, and a fresh session starts centred again.
+ */
+function dragPanelBy(el, handle) {
+  handle.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    e.preventDefault();
+    const host = el.offsetParent || el.parentElement;
+    const r = el.getBoundingClientRect(), hr = host.getBoundingClientRect();
+    const ox = e.clientX - r.left, oy = e.clientY - r.top;
+    const move = (ev) => {
+      el.style.transform = 'none';
+      // kept inside the stage: a panel dragged off the edge cannot be dragged back
+      const x = Math.max(0, Math.min(hr.width - 40, ev.clientX - hr.left - ox));
+      const y = Math.max(0, Math.min(hr.height - 24, ev.clientY - hr.top - oy));
+      el.style.left = x + 'px'; el.style.top = y + 'px';
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+}
+
 function toggleRungRef() {
   const el = $('rungs');
   if (!el) return;
@@ -959,6 +1021,9 @@ function renderRungRef() {
   el.innerHTML = html;
   const close = root.querySelector('#mde-rungclose');
   if (close) close.onclick = () => { el.style.display = 'none'; };
+  const hd = el.querySelector('.hd');
+  // the table is rebuilt on every open, so the handle is a new node each time
+  if (hd) dragPanelBy(el, hd);
 }
 
 /*
@@ -1187,6 +1252,26 @@ function buildModuleList() {
       ex.onclick = (e) => { e.stopPropagation(); io.exportModule(m.name, m); };
       d.appendChild(ex);
     }
+
+    /*
+     * Deleting a module.
+     *
+     * In the corner rather than in the row of actions, because it is the one
+     * button here that cannot be undone by clicking it again, and it should not
+     * sit next to `export` where a slip lands on it.
+     *
+     * The confirmation names what goes, in the order of what is hard to replace:
+     * geometry can be redrawn, a solve is a machine's few minutes, and a
+     * hand-play verdict is a person's time and is gone for good.
+     */
+    if (io.deleteModule) {
+      const del = document.createElement('button');
+      del.className = 'trash';
+      del.textContent = '🗑';
+      del.title = 'Delete "' + m.name + '" and everything recorded about it.';
+      del.onclick = (e) => { e.stopPropagation(); deleteModule(m); };
+      d.appendChild(del);
+    }
     el.appendChild(d);
   }
 }
@@ -1234,6 +1319,39 @@ function handTestQueue() {
  * first save would swallow them into the module. The arena stays where it
  * belongs, behind the hand-test button.
  */
+/*
+ * Delete a module, once someone has read what goes with it.
+ *
+ * The confirmation lists it rather than asking "are you sure": the module file
+ * and its arena are cheap, and the solve and hand-play records inside it are
+ * not. A hand-play verdict cost a person a session of playing a platformer, and
+ * nothing regenerates it -- so it is named explicitly, and named last, where it
+ * is the sentence someone is still reading when they decide.
+ */
+async function deleteModule(m) {
+  if (!m || !io.deleteModule) return;
+  const has = [];
+  if (m.solve) has.push('its solved rung (' + m.solve.minRung + ')');
+  if (m.handPlay) has.push('its HAND-PLAY verdict (rung ' + m.handPlay.minRung +
+                           ') -- a person\'s time, and nothing regenerates it');
+  const lines = ['Delete module "' + m.name + '"?', '',
+    'This removes the module file and the arena built from it.'];
+  if (has.length) lines.push('It also throws away ' + has.join(', and ') + '.');
+  lines.push('', 'The geometry can be redrawn. The records cannot.');
+  if (!confirm(lines.join('\n'))) return;
+
+  // an armed module that no longer exists would place phantom geometry
+  if (pendingModule && pendingModule.name === m.name) setTool('select');
+  try {
+    const r = await io.deleteModule(m.name);
+    if (r && r.error) { alert('Could not delete "' + m.name + '": ' + r.error); return; }
+  } catch (e) {
+    alert('Could not delete "' + m.name + '": ' + e.message);
+    return;
+  }
+  await refreshModuleList();
+}
+
 function editModule(m) {
   if (!m || !Array.isArray(m.objects) || !m.objects.length) return;
   /*
@@ -1644,25 +1762,81 @@ const snap = (v) => grid ? Math.round(v / grid) * grid : Math.round(v);
  *     time, and painting a row of them has no meaning.
  */
 const PAINTABLE = ['plat', 'art', 'spike', 'coin', 'ene', 'bomb', 'platMove'];
-const canPaint = () => paint && grid > 0 && PAINTABLE.includes(tool);
+// with something on the clipboard the armed tool is irrelevant -- the brush is
+// the copied selection, and any tool at all can be showing in the toolbar
+const canPaint = () => paint && grid > 0 && (clipboard.length > 0 || PAINTABLE.includes(tool));
 
 const cellOf = (w) => ({ cx: Math.floor(w.x / grid), cy: Math.floor(w.y / grid) });
 const cellKey = (c) => c.cx + ',' + c.cy;
 
 /*
- * Fit a texture inside one grid cell WITHOUT stretching it.
+ * Which family a texture belongs to, read off its name.
+ *
+ * The tileset ships as a recipe rebuilt from the player's own artwork and
+ * carries no metadata beyond names, so the names are all there is. Two families
+ * behave differently from ordinary decoration when stamped on a grid:
+ *
+ *   hazard -- the spike strip. It is the skin of a lethal rect and has to line
+ *     up edge to edge with its neighbours, so it fills the cell exactly and is
+ *     the one tile allowed to stretch. A letterboxed spike leaves a gap that
+ *     reads as a safe step and is not one.
+ *   surface -- the skin of a solid. It belongs against the face Johnny stands
+ *     on, which is the tile's own top edge, so it goes flush to that edge rather
+ *     than floating in the middle of the cell.
+ *
+ * Corner pieces are decoration: they are cut to sit at a join and have no single
+ * face that is "the top".
+ */
+const isHazardTile = (n) => /hazard|spike/.test(n || '');
+const isSurfaceTile = (n) => /surface/.test(n || '') && !/corner/.test(n || '') && !isHazardTile(n);
+
+/*
+ * Where one texture goes inside one grid cell.
  *
  * The tiles are cut from the game's own artwork at their own aspect ratios, so
  * forcing one into a square cell is the difference between a wall that looks
- * like the game and a wall that looks like the game seen through a funhouse
- * mirror. Letterbox: scale by the tighter of the two axes, then centre the
- * remainder. Never scales up past 1 either -- a tile smaller than the cell stays
- * its own size rather than being blown up into a blur.
+ * like the game and one that looks like the game in a funhouse mirror. So:
+ * letterbox by the tighter axis, never scale UP past 1:1, and let the hazard
+ * family above be the single exception.
+ *
+ * Returns the object's own (unrotated) rect, because that is what o.x/o.y/o.w/
+ * o.h mean -- the renderer turns it about its centre afterwards. So the work is
+ * done on the box it will actually COVER (`rotAABB`), and the corner is backed
+ * out at the end.
+ *
+ * A surface tile's "top" rotates with it: turn a floor 90 degrees and it is a
+ * wall, whose inner edge -- the face you would stand on if you stood on the wall
+ * -- is now the cell's right-hand side. So which cell edge it hugs comes from
+ * `rot`, and it is centred along the other axis. Anything that is not a quarter
+ * turn has no meaningful edge to hug and stays centred.
  */
-function fitTile(tw, th, cell) {
-  const f = Math.min(cell / tw, cell / th, 1);
-  const w = Math.round(tw * f), h = Math.round(th * f);
-  return { w, h, dx: Math.round((cell - w) / 2), dy: Math.round((cell - h) / 2) };
+function placeTile(tile, cx, cy, cell, rot) {
+  // a square filling the cell is a square under any rotation, so the hazard
+  // case needs no frame work at all
+  if (isHazardTile(tile.name)) return { x: cx, y: cy, w: cell, h: cell };
+
+  const deg = (((rot || 0) % 360) + 360) % 360;
+  const ang = deg * Math.PI / 180;
+  // letterbox against the box it will COVER once turned, so a sideways tile is
+  // measured against the cell sideways
+  const cov = rotAABB(0, 0, tile.w, tile.h, ang);
+  const f = Math.min(cell / cov.w, cell / cov.h, 1);
+  const w = Math.round(tile.w * f), h = Math.round(tile.h * f);
+  const a = rotAABB(0, 0, w, h, ang);
+
+  let ax = (cell - a.w) / 2, ay = (cell - a.h) / 2;   // centred, the default
+  if (isSurfaceTile(tile.name) && deg % 90 === 0) {
+    if (deg === 0) ay = 0;                 // top edge up:    hug the cell top
+    else if (deg === 90) ax = cell - a.w;  // top edge right: hug the right side
+    else if (deg === 180) ay = cell - a.h; // upside down:    hug the bottom
+    else ax = 0;                           // 270, top left:  hug the left side
+  }
+  // back out the object's own corner from the box it covers
+  return {
+    x: Math.round(cx + ax + (a.w - w) / 2),
+    y: Math.round(cy + ay + (a.h - h) / 2),
+    w, h,
+  };
 }
 
 /*
@@ -1676,11 +1850,20 @@ function fitTile(tw, th, cell) {
  * no-op, painting over its edge should not.
  */
 function cellOccupied(cx, cy, kind) {
-  const mx = cx * grid + grid / 2, my = cy * grid + grid / 2;
+  const x0 = cx * grid, y0 = cy * grid, x1 = x0 + grid, y1 = y0 + grid;
+  const mx = x0 + grid / 2, my = y0 + grid / 2;
   return map.objects.some((o) => {
     if (o.kind !== kind) return false;
     const b = bounds(o);
-    return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) return true;
+    /*
+     * ...or the other way round. A surface tile hugs one edge of its cell rather
+     * than filling it, so the cell's centre can sit in open space just above or
+     * beside it -- and the centre test alone would then let a second stamp land
+     * on top of the first every time the stroke came back over.
+     */
+    const ox = b.x + b.w / 2, oy = b.y + b.h / 2;
+    return ox >= x0 && ox <= x1 && oy >= y0 && oy <= y1;
   });
 }
 
@@ -1692,8 +1875,8 @@ function stampCell(cx, cy) {
   const o = { id: nextId++, kind: tool, x, y, w: 0, h: 0, ...(k.props || {}) };
   if (tool === 'art') {
     if (!selTile) return null;
-    const f = fitTile(selTile.w, selTile.h, grid);
-    o.x = x + f.dx; o.y = y + f.dy; o.w = f.w; o.h = f.h;
+    const f = placeTile(selTile, x, y, grid, artStyle.rot);
+    o.x = f.x; o.y = f.y; o.w = f.w; o.h = f.h;
     o.tile = selTile.name;
     o.rot = artStyle.rot; o.flipX = artStyle.flipX; o.flipY = artStyle.flipY;
   } else if (k.shape === 'point') {
@@ -1707,12 +1890,94 @@ function stampCell(cx, cy) {
   return o;
 }
 
-/** Stamp every cell of the stroke the cursor has newly entered. */
-function paintAt(d, w) {
-  const c = cellOf(w);
-  const key = cellKey(c);
-  if (d.done.has(key)) return false;
-  d.done.add(key);
+/*
+ * The clipboard as a brush.
+ *
+ * With something copied, a stroke stamps THAT rather than the armed tool's one
+ * object -- which is the difference between filling cells with platforms and
+ * tiling a motif, and tiling a motif is most of what building a room is. The
+ * armed tool stays the fallback for an empty clipboard, so paint never becomes a
+ * mode that quietly does nothing.
+ *
+ * A motif is wider than one cell, so the footprint is its bounding box rounded
+ * up to whole cells, and the stroke's never-stamp-twice bookkeeping has to key
+ * on every cell of that footprint rather than on the one under the cursor.
+ */
+const brushSize = () => {
+  if (!clipboard.length) return { cols: 1, rows: 1 };
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const c of clipboard) {
+    const b = bounds(c);
+    x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+    x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h);
+  }
+  return { cols: Math.max(1, Math.ceil((x1 - x0) / grid)),
+           rows: Math.max(1, Math.ceil((y1 - y0) / grid)) };
+};
+
+/*
+ * Has this exact motif already been stamped here?
+ *
+ * An exact-position test on the first object of the brush, rather than anything
+ * cleverer. "Is this composition already present" needs an identity the editor
+ * does not have, and a false positive -- refusing to paint where the author
+ * meant to -- is worse than a duplicate they can see and undo. Restamping the
+ * same cell IS exact, which is the case that actually happens: a stroke that
+ * wanders back over itself.
+ */
+function motifOccupied(dx, dy) {
+  const c = clipboard[0];
+  const x = c.x + dx, y = c.y + dy;
+  return map.objects.some((o) => o.kind === c.kind && o.x === x && o.y === y);
+}
+
+/** One stamp of the clipboard brush, top-left at cell (cx, cy). Ids, or null. */
+function stampBrush(cx, cy) {
+  const x = cx * grid, y = cy * grid;
+  let x0 = Infinity, y0 = Infinity;
+  for (const c of clipboard) { const b = bounds(c); x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); }
+  if (motifOccupied(x - x0, y - y0)) return null;
+  // paste from the bounding box's corner, so the motif lands square in the cell
+  const made = pasteObjects(clipboard, { x, y }, true);
+  return made.map((o) => o.id);
+}
+
+/*
+ * Stamp every cell of the stroke the cursor has newly entered.
+ *
+ * With shift held the stroke is locked to one axis, chosen by whichever the
+ * cursor has travelled furthest along since the mousedown. Straight floors and
+ * straight walls are nearly everything anyone paints, and a freehand drag makes
+ * neither.
+ */
+function paintAt(d, w, shift) {
+  let c = cellOf(w);
+  if (shift && d.c0) {
+    const dx = Math.abs(c.cx - d.c0.cx), dy = Math.abs(c.cy - d.c0.cy);
+    /*
+     * The axis is LATCHED, and not until the stroke is two cells clear of where
+     * it started. Deciding it fresh on every move draws an L: the first cells of
+     * any stroke are diagonal-ish, so whichever axis happens to lead by one cell
+     * wins for a moment and leaves a stub across the corner. Two cells is also
+     * forgiving of a hand that wanders one cell the wrong way before committing.
+     */
+    if (!d.axis && Math.max(dx, dy) >= 2) d.axis = dx >= dy ? 'x' : 'y';
+    if (!d.axis) c = d.c0;
+    else c = d.axis === 'x' ? { cx: c.cx, cy: d.c0.cy } : { cx: d.c0.cx, cy: c.cy };
+  }
+  const { cols, rows } = d.brush ? brushSize() : { cols: 1, rows: 1 };
+  const keys = [];
+  for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
+    const k = cellKey({ cx: c.cx + i, cy: c.cy + j });
+    if (d.done.has(k)) return false;
+    keys.push(k);
+  }
+  for (const k of keys) d.done.add(k);
+  if (d.brush) {
+    const ids = stampBrush(c.cx, c.cy);
+    if (ids) d.made.push(...ids);
+    return !!ids;
+  }
   const o = stampCell(c.cx, c.cy);
   if (o) d.made.push(o.id);
   return !!o;
@@ -1756,11 +2021,55 @@ function laserRect(o) {
     : { x:o.x - LASER_THICK/2, y:o.y - len/2, w:LASER_THICK, h:len };
 }
 
+/*
+ * A rotated texture's box on screen.
+ *
+ * `rot` is applied by the renderer about the object's centre, so a 90-degree
+ * turn draws a wide tile tall -- while o.w/o.h, which are the tile's size in its
+ * OWN frame, say nothing about it. Every axis-aligned box in the editor is
+ * derived from `bounds`, so leaving it unrotated put the hit test, the marquee
+ * and the resize handles somewhere the object visibly is not: the tile could
+ * only be grabbed by empty space beside it.
+ *
+ * So `bounds` reports what is on screen, and anything that wants to write back
+ * to o.w/o.h comes out of the rotation first (`unrotSize`). Only textures carry
+ * an angle -- everything else in the map format is an axis-aligned rect, and
+ * rotate90 turns those by swapping w and h instead.
+ */
+const artAngle = (o) => (o && o.kind === 'art' && o.rot ? o.rot * Math.PI / 180 : 0);
+
+/** The axis-aligned box a w-by-h rect at (x,y) covers once turned by `ang`. */
+function rotAABB(x, y, w, h, ang) {
+  const c = Math.abs(Math.cos(ang)), s = Math.abs(Math.sin(ang));
+  const aw = w * c + h * s, ah = w * s + h * c;
+  return { x: x + (w - aw) / 2, y: y + (h - ah) / 2, w: aw, h: ah };
+}
+
+/*
+ * The inverse: what w-by-h rect, turned by `ang`, covers an aw-by-ah box.
+ *
+ * aw = w|cos| + h|sin| and ah = w|sin| + h|cos| is a 2x2 system, invertible
+ * whenever cos^2 != sin^2 -- exactly at the diagonals, where the two equations
+ * say the same thing and any rect with the right w+h fits. There the old
+ * proportions are kept, since nothing in the drag says which way to split it.
+ */
+function unrotSize(aw, ah, ang, w0, h0) {
+  const c = Math.abs(Math.cos(ang)), s = Math.abs(Math.sin(ang));
+  const d = c * c - s * s;
+  if (Math.abs(d) < 1e-6) {
+    const sum = aw / (c + s), old = (w0 || 1) + (h0 || 1);
+    return { w: sum * (w0 || 1) / old, h: sum * (h0 || 1) / old };
+  }
+  return { w: (aw * c - ah * s) / d, h: (ah * c - aw * s) / d };
+}
+
 function bounds(o) {
   const k = K(o);
   if (!k) return { x:o.x, y:o.y, w:o.w || 0, h:o.h || 0 };
   if (k.shape === 'beam') return laserRect(o);
   if (k.shape === 'point') { const s = k.size || 32; return { x:o.x - s/2, y:o.y - s/2, w:s, h:s }; }
+  const ang = artAngle(o);
+  if (ang) return rotAABB(o.x, o.y, o.w, o.h, ang);
   return { x:o.x, y:o.y, w:o.w, h:o.h };
 }
 function hit(o, wx, wy) {
@@ -2487,6 +2796,20 @@ function pick(o, additive) {
 }
 
 function onMouseDown(e) {
+  /*
+   * The canvas, and only the canvas.
+   *
+   * The module dialog, the rung reference and the HUD are children of the stage
+   * so they can float over the map, which means a mousedown on any of them
+   * bubbles here -- and with a tool armed, clicking *save module* dropped an
+   * object into the world underneath the panel. The world coordinate it computed
+   * was real; the click was never meant for it.
+   *
+   * By naming the panels rather than demanding e.target IS the canvas: an event
+   * dispatched at the stage itself is a legitimate way to reach the map, and the
+   * question here is only whether something floating swallowed the click.
+   */
+  if (e.target.closest && e.target.closest('#mde-modpanel, #mde-rungs, #mde-hud, #mde-hint')) return;
   const p = stagePos(e);
   const w = toWorld(p.x, p.y);
   // an open module dialog owns its two markers ahead of everything else on the
@@ -2510,8 +2833,9 @@ function onMouseDown(e) {
   if (canPaint() && !spaceDown && !e.ctrlKey && !e.metaKey && !e.altKey && e.button === 0) {
     pushHistory();          // once, for the whole stroke
     sel = [];
-    dragging = { paint: true, done: new Set(), made: [] };
-    paintAt(dragging, w);
+    dragging = { paint: true, done: new Set(), made: [], c0: cellOf(w),
+                 brush: clipboard.length > 0 };
+    paintAt(dragging, w, e.shiftKey);
     refresh();
     return;
   }
@@ -2535,25 +2859,30 @@ function onMouseDown(e) {
   }
 
   /*
-   * Ctrl is the eyedropper, and works whatever tool is armed. On an object it
-   * selects and adopts its settings; on blank space it drops back to the select
-   * tool, which is the usual reason for reaching for the toolbar mid-edit.
+   * Ctrl is the one "and this one too" modifier.
+   *
+   * It used to be two: ctrl was the eyedropper and picked exactly one object,
+   * alt toggled objects in and out of the selection and marqueed additively.
+   * Both mean roughly the same thing to the hand, and remembering which was
+   * which was pure overhead, so ctrl now does all of it -- toggle on an object,
+   * additive marquee on blank space, and it still adopts the settings of
+   * whatever it lands on.
+   *
+   * A ctrl CLICK on blank space keeps the old shortcut of dropping back to the
+   * select tool; that is decided at mouseup, where a click can be told from a
+   * drag, since the drag is the additive marquee.
    */
   if (e.ctrlKey || e.metaKey) {
     const under = topmostAt(w.x, w.y);
-    if (under) { pick(under, false); adoptFrom(under); beginMove(w, under); }
-    else { setTool('select'); sel = []; refresh(); }
-    return;
-  }
-
-  /*
-   * Alt adds to the selection: on an object it toggles that one in or out, on
-   * blank space it marquees without clearing what is already picked.
-   */
-  if (e.altKey) {
-    const under = topmostAt(w.x, w.y);
-    if (under) { pick(under, true); beginMove(w, under); }
-    else { dragging = { marquee:true, x0:w.x, y0:w.y, x1:w.x, y1:w.y, add:true }; }
+    if (under) {
+      pick(under, true);
+      adoptFrom(under);
+      // only if the toggle ADDED it -- otherwise the drag would move the objects
+      // that are still selected, which is not what removing one meant
+      if (sel.includes(under.id)) beginMove(w, under);
+    } else {
+      dragging = { marquee:true, x0:w.x, y0:w.y, x1:w.x, y1:w.y, add:true, ctrlBlank:true };
+    }
     return;
   }
 
@@ -2613,9 +2942,8 @@ function startCreate(w) {
      * 100px grid is a tile that has to be resized by hand every single time.
      */
     if (grid) {
-      const f = fitTile(selTile.w, selTile.h, grid);
-      o.x = snap(w.x - grid / 2) + f.dx; o.y = snap(w.y - grid / 2) + f.dy;
-      o.w = f.w; o.h = f.h;
+      const f = placeTile(selTile, snap(w.x - grid / 2), snap(w.y - grid / 2), grid, artStyle.rot);
+      o.x = f.x; o.y = f.y; o.w = f.w; o.h = f.h;
     } else {
       o.w = selTile.w; o.h = selTile.h;
     }
@@ -2650,7 +2978,7 @@ function onMouseMove(e) {
     view.x = dragging.vx + (p.x - dragging.sx);
     view.y = dragging.vy + (p.y - dragging.sy);
   } else if (dragging.paint) {
-    if (paintAt(dragging, w)) refreshObjs();
+    if (paintAt(dragging, w, e.shiftKey)) refreshObjs();
   } else if (dragging.marquee) {
     dragging.x1 = w.x; dragging.y1 = w.y;
   } else if (dragging.create) {
@@ -2739,7 +3067,10 @@ function onMouseUp() {
     const x0 = Math.min(m.x0, m.x1), x1 = Math.max(m.x0, m.x1);
     const y0 = Math.min(m.y0, m.y1), y1 = Math.max(m.y0, m.y1);
     // a click rather than a drag: leave the selection alone
-    if (Math.abs(x1 - x0) > 3 || Math.abs(y1 - y0) > 3) {
+    if (Math.abs(x1 - x0) <= 3 && Math.abs(y1 - y0) <= 3) {
+      // ...except ctrl on blank space, which is still "back to the select tool"
+      if (m.ctrlBlank) { setTool('select'); sel = []; }
+    } else {
       const inside = map.objects.filter((o) => {
         const b = bounds(o);
         return b.x + b.w >= x0 && b.x <= x1 && b.y + b.h >= y0 && b.y <= y1;
@@ -2773,18 +3104,32 @@ function resize(o, id, mx, my, free) {
   if (id.includes('e')) { w = Math.max(2, snap(mx) - x); }
   if (id.includes('n')) { y = Math.min(snap(my), bottom - 2); h = bottom - y; }
   if (id.includes('s')) { h = Math.max(2, snap(my) - y); }
+  /*
+   * The drag is in screen-axis terms, but o.w/o.h live in the texture's own
+   * rotated frame, so come out of the rotation before touching them and go back
+   * in afterwards. Without rotation both conversions are the identity and this
+   * is the code it always was.
+   */
+  const ang = artAngle(o);
+  let lw = w, lh = h;
+  if (ang) {
+    const u = unrotSize(w, h, ang, o.w, o.h);
+    lw = Math.max(2, u.w); lh = Math.max(2, u.h);
+  }
   // textures keep their aspect on a corner unless shift frees it
   if (o.kind === 'art' && id.length === 2 && !free) {
     const t = tileImgs.get(o.tile);
     if (isReady(t)) {
-      const s = Math.max(w / imgW(t), h / imgH(t));
-      const nw = Math.round(imgW(t) * s), nh = Math.round(imgH(t) * s);
-      if (id.includes('w')) x = right - nw;
-      if (id.includes('n')) y = bottom - nh;
-      w = nw; h = nh;
+      const s = Math.max(lw / imgW(t), lh / imgH(t));
+      lw = Math.round(imgW(t) * s); lh = Math.round(imgH(t) * s);
     }
   }
-  o.x = x; o.y = y; o.w = w; o.h = h;
+  const a = ang ? rotAABB(0, 0, lw, lh, ang) : { w: lw, h: lh };
+  // whichever edges the drag did not move stay exactly where they were
+  if (id.includes('w')) x = right - a.w;
+  if (id.includes('n')) y = bottom - a.h;
+  o.w = lw; o.h = lh;
+  o.x = x + (a.w - lw) / 2; o.y = y + (a.h - lh) / 2;
   refreshProps();
 }
 
@@ -3550,7 +3895,8 @@ function mount(opts) {
  */
 return {
   mount, KINDS,
-  _geom: { rotate90, scaleObj, rotateSelection, clampBox, laserRect, groupBox, moveObjects, bounds, fitTile },
+  _geom: { rotate90, scaleObj, rotateSelection, clampBox, laserRect, groupBox, moveObjects, bounds,
+            placeTile, isSurfaceTile, isHazardTile, rotAABB, unrotSize },
   /*
    * The module half, exported for the same reason: a module that does not survive
    * a trip through the editor loses its solve record and its hand-play verdict,
@@ -3569,7 +3915,10 @@ return {
   // read-only view of the live state, for driving the editor from a test page:
   // handle positions are in world space and the tests need the same transform
   // the canvas uses, which no amount of reading the panels recovers exactly
-  _state: () => ({ view, grid, paint, tool, sel: sel.slice(), objects: map.objects, meta: map.meta,
+  // clipboard is the LIVE array: it is the paint brush now, and a test that
+  // cannot empty it cannot check the fallback to the armed tool
+  _state: () => ({ view, grid, paint, tool, sel: sel.slice(), clipboard,
+                   objects: map.objects, meta: map.meta,
                    filter: modFilter,
                    modules: moduleLib, armed: pendingModule, dialog: modDialog, handleAt, bounds }),
 };

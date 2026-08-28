@@ -338,13 +338,42 @@ wrong in the level.
 - **Module entry/exit markers** -- while the save-as-module panel is open, two
   round markers sit on the canvas. They are hit-tested *before* every other
   handle, because they routinely land exactly on a platform corner.
+- **Ctrl is the one "and this one too" modifier.** On an object it toggles that
+  object in or out of the selection and adopts its settings; a ctrl+drag on blank
+  space marquees *additively*; a ctrl *click* on blank space drops back to the
+  select tool. Alt used to do the selection half and ctrl the eyedropper half,
+  which was two modifiers for one idea and one more thing to remember.
+- **A rotated texture has a rotated box.** `rot` is applied by the renderer about
+  the object's centre, so a quarter-turned tile draws at right angles to the w/h
+  it stores. Hit-testing, the marquee and the resize handles all work from the box
+  on SCREEN; a resize comes back out of the rotation before it writes w/h. Until
+  Phase 5b-8 they did not, and a turned tile could only be grabbed by the empty
+  space beside it.
+- **The floating panels are not the canvas.** The module dialog and the rung
+  reference sit over the stage, so their mousedown bubbles to the canvas handler
+  underneath; a click that lands on one of them is ignored rather than dropping an
+  object into the world behind it.
 
 ### Paint mode
 
 A room is thirty platforms, and thirty platforms used to be thirty clicks, thirty
 drags and thirty squints at the coordinate readout. **Paint** (the toolbar button,
 or `p`) turns a drag into a stroke: every grid cell the cursor enters gets one
-stamp of the armed tool.
+stamp.
+
+**What gets stamped is the clipboard, if there is one.** Copy a selection and a
+stroke tiles *that* -- which is the difference between filling cells with
+platforms and tiling a motif, and tiling a motif is most of what building a room
+is. The footprint is the copied group's bounding box rounded up to whole cells, so
+the never-stamp-twice rule keys on the whole footprint rather than one cell. An
+empty clipboard falls back to the armed tool, so paint is never a mode that
+quietly does nothing.
+
+**Shift locks the stroke to one axis.** Straight floors and straight walls are
+nearly everything anyone paints and a freehand drag makes neither. The axis is
+latched once the stroke is two cells clear of where it began: deciding it fresh
+every move draws an L, because the first cells of any stroke are diagonal-ish and
+whichever axis leads by one wins for a moment.
 
 Three rules, and each is what makes a stroke usable rather than work to clean up
 afterwards:
@@ -371,11 +400,32 @@ areas and doors because they are placed against the shape of a room, one at a
 time.
 
 **Textures size themselves to one grid cell**, painted or clicked, letterboxed and
-never stretched: scaled by the tighter axis and centred in the remainder, and never
-scaled *up* past 1:1. The tiles are cut from the game's own artwork at their own
-aspect ratios, so a stretched tile is the difference between a wall that looks like
-the game and a wall that looks like the game in a funhouse mirror. Off the grid
-they land at their native pixel size, which is what `free` means everywhere else.
+never stretched: scaled by the tighter axis and never scaled *up* past 1:1. The
+tiles are cut from the game's own artwork at their own aspect ratios, so a
+stretched tile is the difference between a wall that looks like the game and a wall
+that looks like the game in a funhouse mirror. Off the grid they land at their
+native pixel size, which is what `free` means everywhere else.
+
+Where inside the cell depends on what the tile IS, read off its name, since the
+tileset is a recipe rebuilt from the player's own artwork and carries no other
+metadata:
+
+- **`*_surface`** -- the skin of a solid, so it goes flush against the face that
+  gets walked on rather than floating in the middle of the cell. Which face that
+  is turns with the tile: a floor's top edge is the cell's top, and the same tile
+  turned 90 degrees is a wall whose "top" is its inner edge, so it hugs the cell's
+  right-hand side. Corner pieces are excluded -- they are cut to sit at a join and
+  have no single face that is the top.
+- **hazard / spike** -- fills the grid square exactly, and is the one tile allowed
+  to stretch. A letterboxed spike leaves a gap between one strip and the next that
+  reads as a safe step and is not one.
+- **everything else** -- centred in the leftover, as before.
+
+`tools/generate-map.js` used to auto-texture every spike rect with a coarse column
+tiling of `hazard_surface`. That is gone: the generator's output is textured by
+hand, and a coarse pass was art to delete before the real art could go in.
+`solver/arena.js` keeps its copy, because an arena is thrown away after one
+hand-play and nobody textures one.
 
 ## The module library
 
@@ -569,6 +619,23 @@ next module at a rung the library no longer agrees with.
 Easiest rung first, which is the right way round for a person: the early ones warm
 up the hands and the hard ones arrive when the module set is already familiar.
 
+#### Deleting a module
+
+A trash can in the bottom-right corner of each module card, away from the row of
+actions because it is the one button on a card that clicking again does not undo.
+
+The confirmation **names what goes with it**, in the order of what is hard to
+replace: the module file and its arena, then the solved rung, then the hand-play
+verdict. Geometry can be redrawn and a solve is a machine's few minutes; a
+hand-play verdict is a person's time and nothing regenerates it, so it is the
+sentence someone is still reading when they decide.
+
+The server deletes the module JSON and the arena map built from it -- the arena is
+derived and rebuilt on every hand-test, so one left behind would be a playable map
+of geometry the library no longer has. The solve and hand-play records live inside
+the module file and go with it. In the userscript there is no arena to clean up,
+because building one is node.
+
 ### The rung reference
 
 The **rung reference** button opens the whole of `solver/ladder.js` as a table: 37
@@ -576,6 +643,12 @@ rungs, what each one adds, and the tiers it carries -- speed, jump, double jump,
 hearts, gun, ammo and the shots that ammo actually loads. Plus the two quantities
 those tiers turn into: terminal run speed in px per frame, and how high one jump
 reaches (and that doubled, for a second jump spent at the apex).
+
+It **drags by its header**. It is meant to be read *while* editing -- "does the
+ledge I am drawing need jmp5" -- and centred on the stage it covers the exact thing
+being measured. It starts centred with a transform; the first drag converts that to
+plain pixel coordinates, and the position then lives on the element, so it survives
+closing and reopening and resets to centre on a fresh session.
 
 There is deliberately **no "gap this clears" column**. Horizontal reach depends on
 the run-up, the headroom and where the double jump is spent, and a plausible

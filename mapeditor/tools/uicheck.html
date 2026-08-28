@@ -63,6 +63,7 @@ let savedModule = null;
 const solveCalls = [];
 const arenaCalls = [];
 const playCalls = [];
+const deleted = [];
 
 const io = {
   storageKey: 'harness',
@@ -76,6 +77,7 @@ const io = {
   solveModule: async (name) => { solveCalls.push(name); return { ok: true, minRung: 8 }; },
   moduleArena: async (name) => { arenaCalls.push(name); return { ok: true, id: 'module-' + name }; },
   play: (id, opts) => { playCalls.push({ id, opts }); },
+  deleteModule: async (name) => { deleted.push(name); return { ok: true, name }; },
 };
 MapEditor.mount({ root: document.getElementById('host'), io });
 
@@ -84,6 +86,10 @@ MapEditor.mount({ root: document.getElementById('host'), io });
 // the test measure the stub rather than the editor. Say yes, and count the asks.
 let confirms = [];
 window.confirm = (msg) => { confirms.push(msg); return true; };
+// alert() BLOCKS a headless browser outright -- the run hangs with an empty log
+// rather than failing -- so it is recorded instead of shown
+let alerts = [];
+window.alert = (msg) => { alerts.push(msg); };
 
 const S = () => MapEditor._state();
 const q = (id) => document.querySelector('#mde-' + id);
@@ -112,16 +118,16 @@ const click = (x, y, opts) => { ev('mousedown', x, y, opts); ev('mouseup', x, y,
  * hand moving slowly enough that it does not, rather than pretending the editor
  * interpolates.
  */
-const stroke = (wx0, wy0, wx1, wy1, steps) => {
+const stroke = (wx0, wy0, wx1, wy1, steps, opts) => {
   const n = steps || 40;
   const a = w2s(wx0, wy0);
-  ev('mousedown', a[0], a[1]);
+  ev('mousedown', a[0], a[1], opts);
   for (let i = 1; i <= n; i++) {
     const p = w2s(wx0 + (wx1 - wx0) * i / n, wy0 + (wy1 - wy0) * i / n);
-    ev('mousemove', p[0], p[1]);
+    ev('mousemove', p[0], p[1], opts);
   }
   const b = w2s(wx1, wy1);
-  ev('mouseup', b[0], b[1]);
+  ev('mouseup', b[0], b[1], opts);
 };
 // Somewhere below everything already on the canvas, aligned to the grid, so a
 // stroke there meets nothing the earlier tests left behind.
@@ -143,6 +149,16 @@ const of = (kind) => S().objects.filter((o) => o.kind === kind);
 const box = (list) => MapEditor._geom.groupBox(list);
 
 function run() {
+  /*
+   * Grid, paint, fit and the texture layer are TOOL STATE. They sat in the top
+   * bar, at the opposite end of the window from the tool buttons they modify,
+   * and the paint toggle in particular is read constantly while drawing.
+   */
+  for (const id of ['grid', 'paint', 'fit', 'artTop']) {
+    ok(!!q(id) && q(id).closest('#mde-left'),
+       'the ' + id + ' control lives with the tools, not in the top-right chrome');
+  }
+
   q('grid').value = '50'; q('grid').dispatchEvent(new Event('change'));
 
   // ---------------------------------------------------- create, snapped
@@ -275,6 +291,81 @@ function run() {
   ok(hud1 !== hud2 && /x/.test(hud2), 'the readout updates on a plain mouse move',
      hud2.replace(/ /g, ' ').slice(0, 46));
 
+  // ------------------------------------------- ctrl is the one "and this too"
+  /*
+   * Alt used to toggle objects in and out of the selection while ctrl picked
+   * exactly one and adopted its settings. Two modifiers for the same idea is one
+   * more thing to remember, so ctrl now does all of it -- and the ctrl-click on
+   * blank space that drops back to the select tool has to survive being told
+   * apart from a ctrl-drag marquee.
+   */
+  deselect();
+  tool('select');
+  /*
+   * At the zoom the earlier tests leave behind, a whole platform is a handful of
+   * screen pixels wide -- so every point inside one is also inside the grab
+   * radius of a group handle, and handles win. That priority is right; it just
+   * makes an aim test meaningless. Zoom to 1:1 for this block and put it back.
+   */
+  const z0 = S().view.z;
+  S().view.z = 1;
+  const cy0 = emptyRow();
+  // two platforms, each by a drag -- a CLICK with a live selection only commits
+  // and clears it, which is the editor's own rule and would leave one object here
+  tool('plat');
+  drag(...w2s(5000, cy0), ...w2s(5100, cy0 + 100));
+  const a1 = of('plat').slice(-1)[0];
+  deselect();
+  tool('plat');
+  drag(...w2s(5300, cy0), ...w2s(5400, cy0 + 100));
+  const a2 = of('plat').slice(-1)[0];
+  deselect();
+  ok(a1 !== a2, 'two separate platforms to select between');
+  /*
+   * A third of the way in, not the centre. With two objects selected the GROUP
+   * box exists, and its handles run along the outer edges of the pair -- so a
+   * click at the middle of the right-hand object can land inside a group handle's
+   * grab radius and be read as a resize instead. That priority is deliberate;
+   * it just makes the centre a bad place to aim a test.
+   */
+  const at = (o) => w2s(o.x + o.w * 0.3, o.y + o.h * 0.3);
+  click(...at(a1), { ctrlKey: true });
+  ok(S().sel.length === 1, 'ctrl+click picks one object', S().sel.length);
+  click(...at(a2), { ctrlKey: true });
+  ok(S().sel.length === 2, 'and a second ctrl+click adds to it rather than replacing it',
+     S().sel.length);
+  click(...at(a2), { ctrlKey: true });
+  ok(S().sel.length === 1, 'clicking the same one again takes it back out',
+     S().sel.length);
+  // a ctrl marquee across both, starting on blank space, adds rather than clears
+  const blank = w2s(4900, cy0 - 60);
+  drag(blank[0], blank[1], ...at(a2), { ctrlKey: true });
+  ok(S().sel.length === 2, 'a ctrl+drag marquee adds to the selection', S().sel.length);
+  click(...w2s(4900, cy0 - 300), { ctrlKey: true });
+  ok(S().sel.length === 0 && S().tool === 'select',
+     'and a ctrl CLICK on blank space is still "back to the select tool"',
+     S().tool + '/' + S().sel.length);
+
+  // ---------------------------------------------- a panel is not the canvas
+  /*
+   * The module dialog floats over the stage, so its mousedown bubbles to the
+   * canvas handler underneath -- and with a tool armed, clicking *save module*
+   * dropped an object into the world behind the panel.
+   */
+  // the dialog needs a selection to describe, so give it the two from above
+  drag(...w2s(4900, cy0 - 60), ...w2s(5400, cy0 + 80));
+  tool('plat');
+  q('modsave').click();
+  ok(!!S().dialog, 'the save-module panel is open', !!S().dialog);
+  const nBefore = S().objects.length;
+  const panel = q('modpanel');
+  panel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 0, clientY: 0 }));
+  ok(S().objects.length === nBefore,
+     'a click on the save-module panel does not paint into the world underneath',
+     S().objects.length - nBefore);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  S().view.z = z0;
+
   paintMode();
 
   // ---------------------------------------------------- undo unwinds all of it
@@ -354,6 +445,69 @@ function paintMode() {
      'one ctrl+z takes back the whole stroke and nothing else',
      (of('coin').length - coins0) + ' coins left, ' + (of('plat').length - plats0) + ' plats');
 
+  // ---------------------------------------------------- shift locks the stroke
+  /*
+   * Straight floors and straight walls are nearly everything anyone paints, and a
+   * freehand drag makes neither. Shift picks the axis the cursor has travelled
+   * furthest along and pins the other one to where the stroke began.
+   */
+  const py0 = of('plat').length;
+  const ry = emptyRow();
+  tool('plat');
+  // a stroke that drifts 100px down over 400px across: shift should flatten it
+  stroke(3000, ry + 25, 3400, ry + 125, 40, { shiftKey: true });
+  const lock = of('plat').slice(py0);
+  ok(lock.length > 1 && lock.every((o) => o.y === lock[0].y),
+     'shift flattens a drifting stroke onto one row',
+     [...new Set(lock.map((o) => o.y))].join('/'));
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+
+  const px0 = of('plat').length;
+  stroke(3000, ry + 25, 3100, ry + 425, 40, { shiftKey: true });
+  const vlock = of('plat').slice(px0);
+  ok(vlock.length > 1 && vlock.every((o) => o.x === vlock[0].x),
+     'and a mostly-vertical one onto one column',
+     [...new Set(vlock.map((o) => o.x))].join('/'));
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+
+  // ---------------------------------------------------- the clipboard as brush
+  /*
+   * The big one: with a selection copied, a stroke stamps THAT rather than the
+   * armed tool's single object. It is the difference between filling cells with
+   * platforms and tiling a motif, and tiling a motif is most of what building a
+   * room is.
+   */
+  const by = emptyRow();
+  tool('plat');
+  // a stroke leaves what it made selected, which is the motif to copy
+  stroke(4000, by + 25, 4050, by + 25);
+  ok(S().sel.length === 2, 'two platforms to copy', S().sel.length);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true }));
+  ok(S().clipboard.length === 2, 'ctrl+c loads the brush with the whole selection',
+     S().clipboard.length);
+
+  const stampY = emptyRow();
+  const p1 = of('plat').length, bc0 = of('coin').length;
+  tool('coin');   // deliberately NOT the kind on the clipboard
+  stroke(4000, stampY + 25, 4400, stampY + 25);
+  const stamped = of('plat').length - p1;
+  ok(stamped >= 4 && stamped % 2 === 0,
+     'a stroke stamps the copied motif rather than the armed tool', stamped + ' platforms');
+  ok(of('coin').length === bc0,
+     'and the armed tool laid down nothing while the brush was loaded',
+     of('coin').length - bc0);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  ok(of('plat').length === p1, 'and the whole brushed run is one undo away',
+     of('plat').length - p1);
+
+  // an empty clipboard falls back to the armed tool rather than painting nothing
+  S().clipboard.length = 0;
+  const fy = emptyRow(), f0 = of('coin').length;
+  stroke(4000, fy + 25, 4200, fy + 25);
+  ok(of('coin').length > f0,
+     'with the clipboard cleared the armed tool paints again', of('coin').length - f0);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+
   // ---------------------------------------------------- paint needs cells
   q('grid').value = '0'; q('grid').dispatchEvent(new Event('change'));
   ok(!S().paint, 'selecting a free grid turns paint off -- there are no cells to paint into');
@@ -371,14 +525,66 @@ function paintMode() {
    * that looks like the game and one that looks like the game in a funhouse
    * mirror.
    */
-  const wide = MapEditor._geom.fitTile(200, 100, 50);
+  const P = MapEditor._geom.placeTile;
+  const wide = P({ name: 'box', w: 200, h: 100 }, 0, 0, 50, 0);
   ok(wide.w === 50 && wide.h === 25, 'a 2:1 tile fits the cell across', wide.w + 'x' + wide.h);
-  ok(wide.dx === 0 && wide.dy === 13, 'and is centred in the leftover', wide.dx + ',' + wide.dy);
-  const tall = MapEditor._geom.fitTile(100, 400, 50);
+  ok(wide.x === 0 && wide.y === 13, 'and ordinary decoration is centred in the leftover',
+     wide.x + ',' + wide.y);
+  const tall = P({ name: 'box', w: 100, h: 400 }, 0, 0, 50, 0);
   ok(tall.w === 13 && tall.h === 50, 'a tall tile fits the other way', tall.w + 'x' + tall.h);
-  const small = MapEditor._geom.fitTile(20, 20, 50);
+  const small = P({ name: 'box', w: 20, h: 20 }, 0, 0, 50, 0);
   ok(small.w === 20 && small.h === 20,
      'a tile smaller than the cell is left alone rather than blown up', small.w + 'x' + small.h);
+
+  /*
+   * A surface tile is the SKIN of a solid, so it belongs against the face that
+   * gets walked on -- and which face that is turns with the tile. Centred in the
+   * cell it floats, and a floor drawn floating is a floor drawn in the wrong
+   * place.
+   */
+  const B = MapEditor._geom.bounds;
+  const face = (deg) => {
+    const r = P({ name: 'blue_surface', w: 200, h: 40 }, 0, 0, 50, deg);
+    const bb = B({ kind: 'art', x: r.x, y: r.y, w: r.w, h: r.h, rot: deg });
+    return { l: Math.round(bb.x), t: Math.round(bb.y),
+             r: Math.round(bb.x + bb.w), b: Math.round(bb.y + bb.h) };
+  };
+  ok(face(0).t === 0, 'a surface tile hugs the top of its cell rather than floating',
+     't=' + face(0).t);
+  ok(face(90).r === 50,
+     'turned 90 degrees its top edge is the cell\'s RIGHT side -- a wall\'s inner face',
+     'r=' + face(90).r);
+  ok(face(180).b === 50, 'upside down it hugs the bottom', 'b=' + face(180).b);
+  ok(face(270).l === 0, 'and at 270 the left side', 'l=' + face(270).l);
+  const corner = P({ name: 'blue_accent_surface_corner', w: 200, h: 40 }, 0, 0, 50, 0);
+  ok(corner.y === 20, 'a corner piece is decoration, not a surface, so it stays centred',
+     'y=' + corner.y);
+
+  /*
+   * Spikes are the exception, and the only tile allowed to stretch: a letterboxed
+   * spike leaves a gap between one strip and the next that reads as a safe step
+   * and is not one.
+   */
+  const haz = P({ name: 'hazard_surface', w: 120, h: 80 }, 100, 200, 50, 0);
+  ok(haz.x === 100 && haz.y === 200 && haz.w === 50 && haz.h === 50,
+     'a hazard tile fills the grid square exactly', haz.x + ',' + haz.y + ' ' + haz.w + 'x' + haz.h);
+
+  /*
+   * A rotated texture's box has to be where the texture IS. It was not: bounds
+   * ignored `rot`, so a turned tile could only be grabbed by the empty space
+   * beside it, and the marquee and the resize handles disagreed with the screen.
+   */
+  const rb = B({ kind: 'art', x: 0, y: 0, w: 200, h: 100, rot: 90 });
+  ok(Math.round(rb.w) === 100 && Math.round(rb.h) === 200,
+     'a texture turned 90 degrees reports a box that is turned too',
+     Math.round(rb.w) + 'x' + Math.round(rb.h));
+  ok(Math.round(rb.x) === 50 && Math.round(rb.y) === -50,
+     'and it stays centred on the point it is drawn about',
+     Math.round(rb.x) + ',' + Math.round(rb.y));
+  const ub = MapEditor._geom.unrotSize(100, 200, Math.PI / 2, 200, 100);
+  ok(Math.round(ub.w) === 200 && Math.round(ub.h) === 100,
+     'and the inverse recovers the tile\'s own size, which is what a resize writes back',
+     Math.round(ub.w) + 'x' + Math.round(ub.h));
 
   q('paint').click();
   ok(!S().paint, 'and the button turns it back off');
@@ -480,6 +686,35 @@ function modulesRest() {
   ok(modRow && /rung 12/.test(modRow.textContent),
      'the badge shows max(solve, handPlay), not the solved rung',
      modRow && modRow.textContent.replace(/\s+/g, ' '));
+
+  /*
+   * Deleting a module.
+   *
+   * The confirmation has to name what goes with it. Geometry can be redrawn and a
+   * solve is a machine's few minutes; a hand-play verdict is a person's time and
+   * nothing regenerates it, so it is the thing someone must have read before they
+   * agree.
+   */
+  const trash = modRow && modRow.querySelector('.trash');
+  ok(!!trash, 'each module row carries a trash can');
+  confirms = [];
+  const del0 = deleted.length;
+  trash.click();
+  ok(confirms.length === 1, 'it asks before deleting anything', confirms.length);
+  ok(/hand-play/i.test(confirms[0] || ''),
+     'and the question names the hand-play verdict that goes with it',
+     (confirms[0] || '').replace(/\s+/g, ' ').slice(0, 90));
+  setTimeout(() => {
+    ok(deleted.length === del0 + 1 && deleted[del0] === 'stub-gap',
+       'saying yes deletes that module and no other', deleted.slice(del0).join());
+    modulesTail();
+  }, 20);
+}
+
+function modulesTail() {
+  // the list was rebuilt after the delete, so take the row again
+  const modRow = [...document.querySelectorAll('#mde-modlist .mod')]
+    .find((r) => r.dataset.module === 'stub-gap');
 
   /*
    * Arm, then place. A module is a tool: clicking its row picks it up, and the
@@ -745,6 +980,27 @@ function rungRef() {
      'and rung 14 is spd5/jmp5 with the double jump, as ladder.js has it', r14.join('|'));
   ok(/no "gap this clears"/i.test(panel.textContent),
      'it says why there is no reach column, since that is the number an author would want');
+
+  /*
+   * It is meant to be read WHILE editing -- "does the ledge I am drawing need
+   * jmp5" -- and centred on the stage it covers the thing being measured. So it
+   * moves, by its header, and the position sticks across a close and reopen.
+   */
+  const hd = panel.querySelector('.hd');
+  const r0 = panel.getBoundingClientRect();
+  hd.dispatchEvent(new MouseEvent('mousedown',
+    { bubbles: true, button: 0, clientX: r0.left + 30, clientY: r0.top + 8 }));
+  window.dispatchEvent(new MouseEvent('mousemove',
+    { bubbles: true, clientX: r0.left + 130, clientY: r0.top + 68 }));
+  window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  const r1 = panel.getBoundingClientRect();
+  ok(Math.round(r1.left - r0.left) === 100 && Math.round(r1.top - r0.top) === 60,
+     'the rung reference drags by its header, so it can be moved off what it covers',
+     Math.round(r1.left - r0.left) + ',' + Math.round(r1.top - r0.top));
+  const moved = panel.style.left;
+  q('rungref').click(); q('rungref').click();
+  ok(panel.style.left === moved, 'and it reopens where it was left', panel.style.left);
+
   document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true }));
   ok(getComputedStyle(panel).display === 'none', 'and escape closes it');
   finish();

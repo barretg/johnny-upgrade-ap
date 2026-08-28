@@ -66,6 +66,12 @@ const io = {
     });
     return r.json();
   },
+  // deletes the module file and its derived arena; the solve and hand-play
+  // records live inside the module file and go with it
+  async deleteModule(name) {
+    const r = await fetch('/api/module/' + encodeURIComponent(name), { method: 'DELETE' });
+    return r.json();
+  },
   /*
    * Run the solver over a module and write the answer into its file. Only the dev
    * server has this -- solving is node, and the userscript has no node -- so the

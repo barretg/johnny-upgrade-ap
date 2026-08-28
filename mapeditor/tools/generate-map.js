@@ -447,8 +447,6 @@ function layout(opts, profile) {
   const displayed = vitrine(vitrineAt.x, vitrineAt.y, vitrineKinds);
   objects.push(...displayed);
 
-  textureSpikes(objects);
-
   const missing = coverageGaps(objects);
   if (missing.length) throw new Error('coverage assertion failed, nothing supplied: ' + missing.join(', '));
 
@@ -559,18 +557,16 @@ const REQUIRED = [
 ];
 const coverageGaps = (objects) => REQUIRED.filter(([, t]) => !objects.some(t)).map(([n]) => n);
 
-// Spikes are not drawn by the runtime at all, so an untextured map is one whose only lethal
-// surfaces are invisible. Same coarse tiling arena.js uses, until Phase 5's autotiler exists.
-function textureSpikes(objects) {
-  for (const s of objects.filter((o) => o.kind === 'spike')) {
-    const cols = Math.max(1, Math.ceil(s.w / G.spikeTileW));
-    const colW = s.w / cols;
-    for (let c = 0; c < cols; c++) {
-      objects.push({ kind: 'art', tile: G.spikeTile, x: s.x + c * colW, y: s.y, w: colW, h: s.h,
-                     rot: 0, flipX: 0, flipY: 0, z: 0 });
-    }
-  }
-}
+/*
+ * Spike auto-texturing used to live here: a coarse column tiling of hazard_surface over every
+ * spike rect, copied from arena.js, on the grounds that spikes are not drawn by the runtime and
+ * an untextured map's only lethal surfaces are invisible.
+ *
+ * Removed. The generator's output is a starting point that gets textured by hand in the editor,
+ * and the editor now stamps a hazard tile filling its grid cell exactly -- so the coarse version
+ * was not a head start, it was art to delete before the real art could go in. arena.js keeps its
+ * copy, because an arena is thrown away after one hand-play and nobody ever textures one.
+ */
 
 // ---------------------------------------------------------------------------
 // CLI
