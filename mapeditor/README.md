@@ -332,12 +332,65 @@ wrong in the level.
   computed from the object actually under the cursor, snapped once, and applied
   to everything. Snapping each object separately pulls a carefully spaced run of
   platforms onto the nearest lines and destroys the spacing that was drawn.
+- **The grid size is on `=` and `-`**, walking the same ladder the dropdown
+  offers -- free, 10, 25, 50, 100 -- and stopping at both ends rather than
+  wrapping. Two different sets of grid sizes would be two answers to what a cell
+  is. The grid gets changed constantly while drawing and reaching for a dropdown
+  breaks the stroke.
+- **A selection that is all one kind can be edited all at once.** The properties
+  panel grows a section that sets a field on every object in the selection.
+  Position is deliberately absent -- setting x on forty objects stacks them, and
+  moving them together is what the drag and the arrow keys are for -- but size is
+  there, because "make all of these 50 tall" is a real thing to want and doing it
+  one at a time is where building a room stops. A field the selection disagrees on
+  shows blank, and leaving it blank leaves it alone, so nothing is flattened by
+  opening the panel and closing it. Mixed kinds get no section at all: a field
+  means a different thing on a different kind, and "set speed on the platforms and
+  the robots" has no answer.
 - **The coordinate readout** sits bottom left and follows the mouse whether or
   not anything is being dragged; with a grid set it also shows where the next
   click would land.
 - **Module entry/exit markers** -- while the save-as-module panel is open, two
   round markers sit on the canvas. They are hit-tested *before* every other
   handle, because they routinely land exactly on a platform corner.
+- **Selection groups.** <a id="selection-groups"></a>`ctrl+g` welds the selection
+  into one group and `ctrl+shift+g` takes it apart; after that, clicking any member
+  selects all of them and the group box is drawn solid rather than dashed, because
+  a group and an ad-hoc multi-select behave differently on the very next click.
+  Deliberately **not** a module: a module is a graded, reusable piece of level with
+  an entry, an exit and a rung, and treating every scenery cluster as one would
+  fill the library with ungraded rubble. Groups are flat -- grouping a selection
+  that already touches a group absorbs it, since there is no gesture that would
+  mean "select the inner one".
+
+  Stored as `o.group` on the objects, so it survives undo, the session store and a
+  copy-paste -- and a paste **remaps** the ids it finds, or clicking the copy would
+  select the original too. It does **not** survive a save through the game map
+  format, which has nowhere to put it, and it is stripped from module records for
+  the same reason `z` is: a stray field would change the geometry hash and drop the
+  solve the module already had.
+- **`r` turns the shape; `alt+r` turns each texture in place.** `r` used to
+  special-case an all-textures selection and spin every tile where it stood, which
+  is right for one tile and wrong for a wall of them -- a wall could not be turned
+  as a wall at all. A single selected texture still keeps its angle for the next
+  stamp, since for one tile the two gestures are the same thing.
+- **Rotating a selection preserves its centre exactly, and does not re-snap to the
+  grid.** It used to snap, which for an oblong lands the group box on a half-grid
+  and pulls it the same way every turn: the group crept across the map and nothing
+  pulled it back. Four quarter turns must be the identity, and that is worth more
+  than landing on the grid -- an off-grid group is one drag to fix, and drift is
+  not fixable at all, because by the time it is visible there is no record of where
+  the thing began. `tools/test-geometry.js` holds the invariant.
+- **Alt is "no, just this one", and it beats ctrl.** Whatever is selected,
+  alt+click reduces it to the single object -- or the single group -- under the
+  cursor. It adopts that object's settings the way ctrl does, so it switches the
+  armed tool too.
+- **Empty space *inside* the selection's box drags the selection.** The box is what
+  the eye reads as "the thing", so a click in the gap between two selected
+  platforms moves them rather than throwing the selection away and starting a
+  marquee. Only space outside the box is blank space. This is a **select-tool**
+  rule: with a drawing tool armed, empty space is where you draw, and a click away
+  from a live selection still commits it.
 - **Ctrl is the one "and this one too" modifier.** On an object it toggles that
   object in or out of the selection and adopts its settings; a ctrl+drag on blank
   space marquees *additively*; a ctrl *click* on blank space drops back to the
@@ -361,13 +414,32 @@ drags and thirty squints at the coordinate readout. **Paint** (the toolbar butto
 or `p`) turns a drag into a stroke: every grid cell the cursor enters gets one
 stamp.
 
-**What gets stamped is the clipboard, if there is one.** Copy a selection and a
-stroke tiles *that* -- which is the difference between filling cells with
-platforms and tiling a motif, and tiling a motif is most of what building a room
-is. The footprint is the copied group's bounding box rounded up to whole cells, so
-the never-stamp-twice rule keys on the whole footprint rather than one cell. An
-empty clipboard falls back to the armed tool, so paint is never a mode that
-quietly does nothing.
+**What gets stamped is the clipboard, if that is the last thing you did.** Copy a
+selection and a stroke tiles *that* -- which is the difference between filling
+cells with platforms and tiling a motif, and tiling a motif is most of what
+building a room is.
+
+Copying **arms** the clipboard brush; picking a tool **disarms** it. Letting the
+clipboard win for as long as it held anything made the toolbar stop meaning
+anything, with no way back to a one-object brush except copying one object. The
+**brush** control in the Drawing section says which is armed and is also the way to
+pick the clipboard back up without copying the same selection twice. An empty
+clipboard falls back to the armed tool, so paint is never a mode that quietly does
+nothing.
+
+**A brush wider than one cell steps by its own footprint.** The footprint is the
+copied group's bounding box rounded up to whole cells; the stroke snaps to a
+lattice of those, laid out from where the stroke began, and the never-stamp-twice
+set keys on every cell of the footprint. Advancing one cell at a time whatever is
+being stamped lands a wide motif at every offset -- the dedupe stops the
+duplicates but not the ragged edge, because each position is a legitimately
+different set of cells. The **global grid setting does not change**: it is still
+what a cell *is*, and the footprint is measured in cells. It is a property of the
+stroke only.
+
+Each stamp is also its own [selection group](#selection-groups), because a stamp
+goes through the same paste path a copy does -- so a motif dropped forty times is
+forty things you can click one of.
 
 **Shift locks the stroke to one axis.** Straight floors and straight walls are
 nearly everything anyone paints and a freehand drag makes neither. The axis is
@@ -421,11 +493,20 @@ metadata:
   reads as a safe step and is not one.
 - **everything else** -- centred in the leftover, as before.
 
-`tools/generate-map.js` used to auto-texture every spike rect with a coarse column
-tiling of `hazard_surface`. That is gone: the generator's output is textured by
-hand, and a coarse pass was art to delete before the real art could go in.
-`solver/arena.js` keeps its copy, because an arena is thrown away after one
-hand-play and nobody textures one.
+**Spikes get filled in one press.** Spikes are the only lethal thing the runtime
+does not draw -- `mapkit/renderer.js` fills platforms flat black, so an untextured
+platform is merely plain and an untextured spike rect is an invisible instant
+death. **fill spikes** covers every spike rect that has no art over its centre;
+`mapeditor/tools/autotile-spikes.js` does the same to a map file from the command
+line, calling the same function, because two answers to "where do the spike tiles
+go" would be two sets of gaps and a gap between two strips reads as a safe step.
+
+Each rect is divided **evenly** rather than laid with whole tiles and a clipped
+remainder: art objects cannot clip, only resize, so clipping in practice means one
+visibly squashed column at the end of every strip -- which is what the generator's
+old placeholder did. Spreading the error over every tile makes it a percent or two
+of scale nobody sees. It is idempotent, so pressing it twice does nothing and
+hand-textured strips are left alone.
 
 ## The module library
 

@@ -277,11 +277,28 @@ function run() {
   const gb = box(two);
   drag(...w2s(gb.x - 100, gb.y - 100), ...w2s(gb.x + gb.w + 100, gb.y + gb.h + 100));
   ok(S().sel.length >= 2, 'marquee takes both', S().sel.length);
+  /*
+   * The marquee also catches the camera area from the tests above, and after the
+   * rotation tests that area is legitimately off the grid -- rotating a group now
+   * preserves its centre exactly rather than snapping the result, so that four
+   * turns come back where they started. The area is first in the selection and so
+   * is the anchor the shared offset is computed from, which would make this
+   * measure where a rotation left it rather than what a group move does. Put it
+   * back on the grid first; the claim under test is the offset, not the area.
+   */
+  for (const id of S().sel) {
+    const o = S().objects.find((q) => q.id === id);
+    if (o && o.kind === 'area') { o.x = Math.round(o.x / 50) * 50; o.y = Math.round(o.y / 50) * 50; }
+  }
   const grab = w2s(two[0].x + two[0].w / 2, two[0].y + two[0].h / 2);
   drag(grab[0], grab[1], grab[0] + 41, grab[1] + 17);
   ok(two[1].x - two[0].x === gap, 'the off-grid offset survives a group move',
      gap + ' -> ' + (two[1].x - two[0].x));
-  ok(two[0].x % 50 === 0, 'and the object under the cursor lands on the grid', two[0].x);
+  ok(two[0].x % 50 === 0, 'and the object under the cursor lands on the grid',
+     two[0].x + ' | ' + S().sel.map((id) => {
+       const o = S().objects.find((q) => q.id === id);
+       return o.kind + '@' + Math.round(o.x);
+     }).join(' '));
 
   // ---------------------------------------------------- the coordinate readout
   ev('mousemove', 300, 300);
@@ -345,6 +362,184 @@ function run() {
   ok(S().sel.length === 0 && S().tool === 'select',
      'and a ctrl CLICK on blank space is still "back to the select tool"',
      S().tool + '/' + S().sel.length);
+
+  // ---------------------------------------------------- selection groups
+  /*
+   * "These forty things are one thing while I am moving them around" -- and
+   * deliberately not a module, which is a graded piece of level with an entry, an
+   * exit and a rung.
+   */
+  click(...at(a1), { ctrlKey: true });
+  click(...at(a2), { ctrlKey: true });
+  ok(S().sel.length === 2, 'both picked, ready to group', S().sel.length);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', ctrlKey: true, bubbles: true }));
+  ok(a1.group && a1.group === a2.group, 'ctrl+g puts them in one group',
+     a1.group + '/' + a2.group);
+  click(...w2s(4900, cy0 - 300), { ctrlKey: true });    // blank: clears
+  ok(S().sel.length === 0, 'selection cleared', S().sel.length);
+  click(...at(a1));
+  ok(S().sel.length === 2, 'clicking ONE member selects the whole group', S().sel.length);
+
+  /*
+   * A pasted copy gets a FRESH group id. Carrying the original's would mean
+   * clicking the copy also selected the original -- two clusters on opposite
+   * sides of the map moving as one, which is the opposite of what a group is for.
+   */
+  const oldGroup = a1.group;
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true }));
+  ev('mousemove', ...w2s(5000, cy0 + 600));   // paste lands at the last cursor position
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true }));
+  const copies = S().sel.map((id) => S().objects.find((o) => o.id === id));
+  ok(copies.length === 2 && copies[0].group && copies[0].group === copies[1].group,
+     'a pasted copy is a group of its own', copies.map((o) => o.group).join('/'));
+  ok(copies[0].group !== oldGroup, 'and not the group it was copied from',
+     copies[0].group + ' vs ' + oldGroup);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+
+  /*
+   * Undo restores from a JSON snapshot, so every object is a NEW one and a1/a2 are
+   * detached copies now. Take them back by id.
+   */
+  const live = (o) => S().objects.find((q) => q.id === o.id);
+  click(...at(live(a1)));
+  document.dispatchEvent(new KeyboardEvent('keydown',
+    { key: 'g', ctrlKey: true, shiftKey: true, bubbles: true }));
+  ok(!live(a1).group && !live(a2).group, 'ctrl+shift+g takes them apart again',
+     live(a1).group + '/' + live(a2).group);
+  click(...w2s(4900, cy0 - 300), { ctrlKey: true });
+
+  // ---------------------------------------------------- 5b-10: the small ones
+  /*
+   * The grid ladder on = and -, walking the same steps the dropdown offers. Two
+   * different sets of grid sizes would be two answers to what a cell is.
+   */
+  const gkey = (k) => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+  q('grid').value = '25'; q('grid').dispatchEvent(new Event('change'));
+  gkey('=');
+  ok(S().grid === 50, '= steps the grid up one rung', S().grid);
+  gkey('=');
+  ok(S().grid === 100, 'and again', S().grid);
+  gkey('=');
+  ok(S().grid === 100, 'and stops at the top rather than wrapping', S().grid);
+  gkey('-'); gkey('-'); gkey('-'); gkey('-');
+  ok(S().grid === 0, '- walks back down to free', S().grid);
+  gkey('-');
+  ok(S().grid === 0, 'and stops there', S().grid);
+  q('grid').value = '50'; q('grid').dispatchEvent(new Event('change'));
+
+  /*
+   * Alt is "no, just this one", and it beats ctrl. The box a selection draws is
+   * what the eye reads as the thing, so the gap between two selected platforms
+   * has to drag it rather than throw it away.
+   */
+  // the undo in the groups block above detached a1/a2, so everything here goes
+  // through the live object rather than the captured reference
+  const liveA = (o) => S().objects.find((q2) => q2.id === o.id);
+  tool('select');
+  click(...at(liveA(a1)), { ctrlKey: true });
+  click(...at(liveA(a2)), { ctrlKey: true });
+  ok(S().sel.length === 2, 'two picked, to reduce', S().sel.length);
+  click(...at(liveA(a2)), { altKey: true, ctrlKey: true });
+  ok(S().sel.length === 1, 'alt+click cuts the selection down to the one under it, over ctrl',
+     S().sel.length);
+  ok(S().sel[0] === a2.id, 'and it is the right one', S().sel[0] + ' vs ' + a2.id);
+
+  ok(S().tool === 'plat', 'alt adopts the settings of what it picked, as ctrl does', S().tool);
+
+  click(...at(liveA(a1)), { ctrlKey: true });
+  ok(S().sel.length === 2, 'both again', S().sel.length);
+  /*
+   * Back to the select tool on purpose. The interior-drag rule is a SELECT-tool
+   * rule: with a drawing tool armed, empty space is where you draw, and the
+   * editor's own "a click away from a live selection commits it" still applies.
+   */
+  tool('select');
+  /*
+   * A point in the GAP between the two, and mid-height: the group box's own
+   * handles sit on its edges and win the mousedown, correctly. Live objects
+   * throughout -- the undo above detached a1/a2, and a stale reference reads the
+   * old position however well the editor behaves.
+   */
+  const L1 = liveA(a1), L2 = liveA(a2);
+  const lo = L1.x < L2.x ? L1 : L2, hi = L1.x < L2.x ? L2 : L1;
+  const gapX = (lo.x + lo.w + hi.x) / 2;
+  const gapY = lo.y + lo.h / 2;
+  const empty = !S().objects.some((o) => {
+    const bb = MapEditor._geom.bounds(o);
+    return gapX >= bb.x && gapX <= bb.x + bb.w && gapY >= bb.y && gapY <= bb.y + bb.h;
+  });
+  ok(empty, 'the test point really is in empty space', gapX + ',' + gapY);
+  const ax0 = lo.x;
+  drag(...w2s(gapX, gapY), ...w2s(gapX + 200, gapY));
+  ok(lo.x === ax0 + 200 && S().sel.length === 2,
+     'a drag from empty space INSIDE the selection box moves it instead of clearing it',
+     ax0 + ' -> ' + lo.x + ', sel ' + S().sel.length);
+  // dragged back rather than undone: a ctrl+z here would pop whatever the last
+  // history entry happened to be if the drag had not moved anything
+  drag(...w2s(gapX + 200, gapY), ...w2s(gapX, gapY));
+  ok(lo.x === ax0, 'and back again', lo.x);
+  click(...w2s(4900, cy0 - 300), { ctrlKey: true });
+
+  /*
+   * Mass edit, only on a selection that is all one kind -- a field means a
+   * different thing on a different kind, and "set speed on the platforms and the
+   * robots" has no answer.
+   */
+  // liveA is defined at the top of this block
+  click(...at(liveA(a1)), { ctrlKey: true });
+  click(...at(liveA(a2)), { ctrlKey: true });
+  const propsEl = q('props');
+  ok(/All 2 are Platform/.test(propsEl.textContent),
+     'a homogeneous selection offers to edit them all at once',
+     propsEl.textContent.replace(/\s+/g, ' ').slice(0, 60));
+  const hIn = [...propsEl.querySelectorAll('.field input')]
+    .find((i, n) => propsEl.querySelectorAll('.field .row2 span')[n] &&
+                    propsEl.querySelectorAll('.field .row2 span')[n].textContent === 'height');
+  ok(!!hIn, 'with a height field');
+  hIn.value = '77';
+  hIn.dispatchEvent(new Event('change', { bubbles: true }));
+  ok(liveA(a1).h === 77 && liveA(a2).h === 77, 'and setting it sets every one of them',
+     liveA(a1).h + '/' + liveA(a2).h);
+  click(...w2s(4900, cy0 - 300), { ctrlKey: true });
+
+  // ------------------------------------------- r turns the shape, alt+r the tiles
+  /*
+   * `r` used to special-case an all-textures selection and spin each tile in
+   * place, which is right for one tile and wrong for a wall of them -- a wall
+   * could not be turned as a wall at all. That behaviour moved to alt+r.
+   *
+   * The fixture serves no tiles, so the textures are put on the canvas directly;
+   * what is under test is the key handling, not the palette.
+   */
+  const ay = emptyRow();
+  S().objects.push({ id: 90001, kind: 'art', x: 7000, y: ay, w: 200, h: 50,
+                     tile: 'blue_surface', rot: 0, flipX: 0, flipY: 0, z: 0 });
+  S().objects.push({ id: 90002, kind: 'art', x: 7000, y: ay + 300, w: 200, h: 50,
+                     tile: 'blue_surface', rot: 0, flipX: 0, flipY: 0, z: 0 });
+  const t1 = () => S().objects.find((o) => o.id === 90001);
+  const t2 = () => S().objects.find((o) => o.id === 90002);
+  click(...w2s(7100, ay + 25));
+  click(...w2s(7100, ay + 325), { ctrlKey: true });
+  ok(S().sel.length === 2, 'two textures selected', S().sel.length);
+
+  const y1 = t1().y, y2 = t2().y;
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', bubbles: true }));
+  ok(t1().y !== y1 && t2().y !== y2,
+     'r turns the SHAPE, so a wall of textures moves about the selection centre',
+     y1 + '->' + t1().y + ', ' + y2 + '->' + t2().y);
+  ok(t1().rot === 90 && t2().rot === 90, 'and each tile faces the new way too',
+     t1().rot + '/' + t2().rot);
+
+  const p1y = t1().y, p2y = t2().y;
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', altKey: true, bubbles: true }));
+  ok(t1().y === p1y && t2().y === p2y,
+     'alt+r leaves them where they are -- it re-faces the tiles, it does not move them',
+     p1y + '/' + t1().y);
+  ok(t1().rot === 180 && t2().rot === 180, 'turning each one in place', t1().rot);
+  for (let i = 0; i < 2; i++) {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  }
+  click(...w2s(4900, cy0 - 300), { ctrlKey: true });
 
   // ---------------------------------------------- a panel is not the canvas
   /*
@@ -485,10 +680,31 @@ function paintMode() {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true }));
   ok(S().clipboard.length === 2, 'ctrl+c loads the brush with the whole selection',
      S().clipboard.length);
+  ok(S().clipBrush, 'and copying is what ARMS it');
+  ok(/clipboard \(2\)/.test(q('brush').textContent),
+     'the Drawing section says which brush is armed', q('brush').textContent);
 
+  /*
+   * Picking a tool puts the clipboard brush down. Letting the clipboard win for as
+   * long as it held anything made the toolbar stop meaning anything, with no way
+   * back to a one-object brush except copying one object.
+   */
   const stampY = emptyRow();
   const p1 = of('plat').length, bc0 = of('coin').length;
-  tool('coin');   // deliberately NOT the kind on the clipboard
+  tool('coin');
+  ok(!S().clipBrush, 'picking a tool disarms it again');
+  ok(/brush: coin/.test(q('brush').textContent), 'and the indicator follows',
+     q('brush').textContent);
+  const c1 = of('coin').length;
+  stroke(4000, stampY + 25, 4200, stampY + 25);
+  ok(of('coin').length > c1 && of('plat').length === p1,
+     'so a stroke paints the armed tool, not the clipboard',
+     (of('coin').length - c1) + ' coins, ' + (of('plat').length - p1) + ' plats');
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+
+  // the indicator is also the way back, so re-arming is not "copy it all again"
+  q('brush').click();
+  ok(S().clipBrush, 'clicking the indicator picks the clipboard brush back up');
   stroke(4000, stampY + 25, 4400, stampY + 25);
   const stamped = of('plat').length - p1;
   ok(stamped >= 4 && stamped % 2 === 0,
@@ -496,11 +712,63 @@ function paintMode() {
   ok(of('coin').length === bc0,
      'and the armed tool laid down nothing while the brush was loaded',
      of('coin').length - bc0);
+
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
   ok(of('plat').length === p1, 'and the whole brushed run is one undo away',
      of('plat').length - p1);
 
+  /*
+   * A brush wider than one cell steps by its OWN footprint.
+   *
+   * Tested with a motif that has a GAP in it, because a contiguous one cannot tell
+   * the two behaviours apart: the never-stamp-twice set already blocks every
+   * overlapping position, so a solid two-cell brush lands on the same lattice
+   * either way. A three-cell brush with a hole in the middle does not -- one-cell
+   * stepping puts its second stamp inside the first one's gap.
+   */
+  // MouseEvent rounds clientX to whole pixels, so at the zoom these tests leave
+  // behind one screen pixel is ~18 world px and two cells collapse into one
+  const gz = S().view.z;
+  S().view.z = 1;
+  const gy = emptyRow();
+  // deselect() clicks stage pixel (4,4), which at zoom 1 lands somewhere
+  // unpredictable in the world -- and a drag with a live selection MOVES it
+  // rather than creating. Clear on known-blank world space instead.
+  const clear = () => { tool('select'); click(...w2s(6000, gy + 400)); };
+  // and paint is still on from the tests above, so a drag would paint the motif
+  // rather than draw it
+  q('paint').click();
+  clear();
+  tool('plat');
+  drag(...w2s(6000, gy), ...w2s(6050, gy + 50));
+  clear();
+  tool('plat');
+  drag(...w2s(6100, gy), ...w2s(6150, gy + 50));
+  clear();
+  const pair = of('plat').slice(-2).sort((a, b) => a.x - b.x);
+  drag(...w2s(5950, gy - 60), ...w2s(6200, gy + 110));   // marquee both
+  ok(S().sel.length === 2, 'a two-piece motif with a gap in it', S().sel.length);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true }));
+  const span = pair[1].x - pair[0].x;
+  ok(span === 100, 'the pieces are two cells apart', span);
+
+  q('paint').click();
+  ok(S().paint && S().clipBrush, 'paint back on, with the gapped motif as the brush');
+  const sy = emptyRow(), g1 = of('plat').length;
+  stroke(6000, sy + 25, 6600, sy + 25);
+  const gxs = of('plat').slice(g1).map((o) => o.x).sort((a, b) => a - b);
+  ok(gxs.length >= 4 && gxs.length % 2 === 0, 'the stroke stamps whole motifs', gxs.length);
+  ok(gxs.every((x) => [0, 100].includes((x - gxs[0]) % 150)),
+     'and every one lands on the footprint lattice, three cells apart',
+     gxs.join(' '));
+  ok(S().grid === 50,
+     'while the global grid setting is untouched -- the footprint is the stroke\'s own',
+     S().grid);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+  S().view.z = gz;
+
   // an empty clipboard falls back to the armed tool rather than painting nothing
+  tool('coin');
   S().clipboard.length = 0;
   const fy = emptyRow(), f0 = of('coin').length;
   stroke(4000, fy + 25, 4200, fy + 25);

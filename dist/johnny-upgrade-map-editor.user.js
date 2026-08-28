@@ -2326,11 +2326,24 @@ const HTML = `
         <option value="100">100</option>
       </select>
     </div>
-    <button id="mde-paint" style="width:100%;margin-top:5px" title="Paint mode. Drag across the canvas and every grid cell the cursor enters gets one stamp, snapped to the cell and never doubled up. With a selection copied, the stamp is that selection instead of the armed tool. Hold shift to lock the stroke to one axis. The whole stroke is one undo. Needs a grid; key p.">paint</button>
+    <button id="mde-paint" style="width:100%;margin-top:5px" title="Paint mode. Drag across the canvas and every grid cell the cursor enters gets one stamp, snapped to the cell and never doubled up. Hold shift to lock the stroke to one axis. The whole stroke is one undo. Needs a grid; key p.">paint</button>
+    <!--
+      What a stroke will stamp. Reading it off the toolbar is not possible once
+      the clipboard can be the brush, and a paint mode that silently stamps
+      something other than the armed tool is worse than no brush at all.
+    -->
+    <button id="mde-brush" style="width:100%;margin-top:5px">brush: tool</button>
     <div class="tools" style="margin-top:5px">
       <button id="mde-artTop" class="on">textures on top</button>
       <button id="mde-fit">fit</button>
     </div>
+    <!--
+      Spikes are the only lethal thing the runtime does not draw, so an untextured
+      spike rect is an invisible instant death and a map is not finished while one
+      exists. A hundred clicks nobody makes, on a button.
+    -->
+    <button id="mde-fillspikes" style="width:100%;margin-top:5px"
+      title="Cover every untextured spike rect with the hazard tile, dividing each rect evenly so no tile is visibly squashed. Spikes that already have art over them are left alone, so this is safe to press twice and safe over hand-textured work. One undo.">fill spikes</button>
   </div>
   <div class="sec">
     <h2>Textures</h2>
@@ -2358,6 +2371,10 @@ const HTML = `
     <div><kbd>drag</kbd> marquee select</div>
     <div>paint: <kbd>shift</kbd> locks the stroke to one axis</div>
     <div>paint: a copied selection is the brush</div>
+    <div><kbd>alt+click</kbd> just this one, whatever else is picked</div>
+    <div><kbd>ctrl+g</kbd> group &middot; <kbd>ctrl+shift+g</kbd> ungroup</div>
+    <div><kbd>=</kbd>/<kbd>-</kbd> grid size up / down</div>
+    <div><kbd>r</kbd> turns the shape &middot; <kbd>alt+r</kbd> turns each texture</div>
     <div><kbd>corner</kbd> resize &middot; <kbd>space+drag</kbd> pan</div>
     <div>many selected: box resizes &amp; rotates as one</div>
     <div>green handles = door trigger zone</div>
@@ -2476,6 +2493,10 @@ function redo() {
 
 function copySel() {
   clipboard = selected().map((o) => JSON.parse(JSON.stringify(o)));
+  // copying is what arms the clipboard as the paint brush; picking a tool is what
+  // puts it down again
+  clipBrush = clipboard.length > 0;
+  renderBrush();
 }
 /*
  * Paste lands the copied group under the cursor rather than on top of the
@@ -2502,9 +2523,21 @@ function pasteObjects(clipboard, at, quiet) {
   let x0 = Infinity, y0 = Infinity;
   for (const c of clipboard) { x0 = Math.min(x0, c.x); y0 = Math.min(y0, c.y); }
   const dx = snap(w.x) - x0, dy = snap(w.y) - y0;
+  /*
+   * Group ids are REMAPPED, not copied. A pasted platform carrying the original's
+   * group id would mean clicking the copy also selected the original -- two
+   * clusters on opposite sides of the map moving as one, which is the opposite of
+   * what a group is for. Remapped as a batch, so a paste of two groups stays two.
+   */
+  const regroup = new Map();
+  let nextG = newGroupId();
   const made = clipboard.map((c) => {
     const o = JSON.parse(JSON.stringify(c));
     o.id = nextId++;
+    if (o.group) {
+      if (!regroup.has(o.group)) regroup.set(o.group, nextG++);
+      o.group = regroup.get(o.group);
+    }
     o.x += dx; o.y += dy;
     // a patrol range travels with the thing that patrols it
     if (o.xmin !== undefined && K(o) && K(o).path) { o.xmin += dx; o.xmax += dx; o.ymin += dy; o.ymax += dy; }
@@ -2700,6 +2733,9 @@ function stripModuleObject(o) {
   // z on anything but a texture is an editing aid -- which of two overlapping
   // objects is clickable -- and is not part of the level
   if (c.kind !== 'art') delete c.z;
+  // a selection group is an editing aid like z, and letting one into a module
+  // record would change its geometry hash and drop the solve it already had
+  delete c.group;
   for (const f of MODULE_OPTIONAL[c.kind] || []) if (!c[f]) delete c[f];
   /*
    * Fixed key order, so the same module always serialises to the same bytes.
@@ -3691,12 +3727,108 @@ const snap = (v) => grid ? Math.round(v / grid) * grid : Math.round(v);
  *     time, and painting a row of them has no meaning.
  */
 const PAINTABLE = ['plat', 'art', 'spike', 'coin', 'ene', 'bomb', 'platMove'];
-// with something on the clipboard the armed tool is irrelevant -- the brush is
-// the copied selection, and any tool at all can be showing in the toolbar
-const canPaint = () => paint && grid > 0 && (clipboard.length > 0 || PAINTABLE.includes(tool));
+/*
+ * What a stroke stamps: the clipboard, or the armed tool.
+ *
+ * The clipboard wins only while it is the most recent thing you did. Copying
+ * arms it, picking a tool disarms it. Letting it win outright for as long as it
+ * held anything -- which is what shipped first -- made the toolbar stop meaning
+ * anything, with no way back to a one-object brush except copying one object.
+ */
+let clipBrush = false;
+const brushIsClipboard = () => clipBrush && clipboard.length > 0;
+
+/*
+ * Say which brush is armed, and offer the way back to the other one.
+ *
+ * An indicator rather than only a label: with the clipboard armed the toolbar no
+ * longer answers "what will this stroke draw", and a paint mode that quietly
+ * stamps something other than the armed tool is worse than having no brush.
+ * Clicking it toggles, so re-arming a clipboard you disarmed by reaching for a
+ * tool does not mean copying the same selection twice.
+ */
+function renderBrush() {
+  const b = root && root.querySelector('#mde-brush');
+  if (!b) return;
+  const on = brushIsClipboard();
+  b.classList.toggle('on', on);
+  b.disabled = !on && clipboard.length === 0;
+  b.textContent = on
+    ? 'brush: clipboard (' + clipboard.length + ')'
+    : 'brush: ' + (PAINTABLE.includes(tool) ? tool : 'tool');
+  b.title = clipboard.length === 0
+    ? 'Copy a selection (ctrl+c) and a stroke stamps that instead of the armed tool.'
+    : on
+      ? 'A stroke stamps the ' + clipboard.length + ' copied objects. Picking a tool puts the ' +
+        'clipboard brush down; click here to pick it back up.'
+      : 'A stroke stamps the armed tool. Click to go back to painting the ' + clipboard.length +
+        ' objects on the clipboard.';
+}
+const canPaint = () => paint && grid > 0 && (brushIsClipboard() || PAINTABLE.includes(tool));
 
 const cellOf = (w) => ({ cx: Math.floor(w.x / grid), cy: Math.floor(w.y / grid) });
 const cellKey = (c) => c.cx + ',' + c.cy;
+
+/*
+ * Spikes are the only lethal thing the runtime does not draw.
+ *
+ * `mapkit/renderer.js` fills platforms flat black, so an untextured platform is
+ * merely plain; an untextured spike rect is an invisible instant death. So a map
+ * is not finished until every spike carries art, and doing that by hand is a
+ * hundred clicks nobody makes.
+ *
+ * The tiling divides the rect EVENLY rather than laying whole tiles and clipping
+ * the last one. Art objects cannot clip -- they can only be resized -- so
+ * "clip the remainder" in practice means one visibly squashed column at the end
+ * of every strip, which is what the generator's placeholder did. Spreading the
+ * error over every tile instead makes it a percent or two of scale nobody sees.
+ *
+ * Natural tile size is the caller's, because the editor knows the real dimensions
+ * from the palette and a node script only has the recipe.
+ */
+const SPIKE_TILE = { name: 'hazard_surface', w: 120, h: 80 };
+
+function spikeArt(rect, tile) {
+  const t = tile || SPIKE_TILE;
+  const out = [];
+  const w = Number(rect.w) || 0, h = Number(rect.h) || 0;
+  if (w <= 0 || h <= 0) return out;
+  const cols = Math.max(1, Math.round(w / t.w));
+  const rows = Math.max(1, Math.round(h / t.h));
+  const cw = w / cols, ch = h / rows;
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows; r++) {
+      out.push({ kind: 'art', tile: t.name,
+                 x: rect.x + c * cw, y: rect.y + r * ch, w: cw, h: ch,
+                 rot: 0, flipX: 0, flipY: 0, z: 0 });
+    }
+  }
+  return out;
+}
+
+/*
+ * Does this spike rect already have art over it?
+ *
+ * By centre containment, the same question `cellOccupied` asks: running "fill
+ * spikes" twice should be a no-op rather than doubling every tile, and an author
+ * who has textured one strip by hand should keep that work.
+ */
+const spikeIsCovered = (s, objs) => objs.some((o) => o.kind === 'art' &&
+  o.x + o.w / 2 >= s.x && o.x + o.w / 2 <= s.x + s.w &&
+  o.y + o.h / 2 >= s.y && o.y + o.h / 2 <= s.y + s.h);
+
+/**
+ * Art for every untextured spike rect in `objs`. Pure: returns what to add.
+ */
+function autotileSpikes(objs, tile) {
+  const out = [];
+  for (const s of objs) {
+    if (s.kind !== 'spike') continue;
+    if (spikeIsCovered(s, objs)) continue;
+    out.push(...spikeArt(s, tile));
+  }
+  return out;
+}
 
 /*
  * Which family a texture belongs to, read off its name.
@@ -3894,7 +4026,25 @@ function paintAt(d, w, shift) {
     if (!d.axis) c = d.c0;
     else c = d.axis === 'x' ? { cx: c.cx, cy: d.c0.cy } : { cx: d.c0.cx, cy: c.cy };
   }
-  const { cols, rows } = d.brush ? brushSize() : { cols: 1, rows: 1 };
+  /*
+   * A brush wider than one cell steps by its OWN footprint.
+   *
+   * Advancing one grid cell at a time whatever is being stamped means a
+   * three-cell motif lands at every offset and overlaps itself into a mess -- the
+   * never-stamp-twice rule stops the duplicates but not the ragged edge, because
+   * each position is a legitimately different set of cells. So the stroke snaps
+   * to a lattice of footprints laid out from where the stroke began.
+   *
+   * The global grid setting does not change: it is still what a cell IS, and the
+   * footprint is measured in cells. This is a property of the stroke only.
+   */
+  const { cols, rows } = d.foot || { cols: 1, rows: 1 };
+  if (d.c0 && (cols > 1 || rows > 1)) {
+    c = {
+      cx: d.c0.cx + Math.floor((c.cx - d.c0.cx) / cols) * cols,
+      cy: d.c0.cy + Math.floor((c.cy - d.c0.cy) / rows) * rows,
+    };
+  }
   const keys = [];
   for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) {
     const k = cellKey({ cx: c.cx + i, cy: c.cy + j });
@@ -4320,10 +4470,25 @@ function rotateSelection(list, quarters) {
   if (!b) return;
   const cx = b.x + b.w/2, cy = b.y + b.h/2;
   const turns = ((quarters % 4) + 4) % 4;
+  if (!turns) return;
   for (let i = 0; i < turns; i++) for (const o of list) rotate90(o, cx, cy);
-  if (!grid || !turns) return;
+  /*
+   * Put the group back on the centre it turned about, exactly.
+   *
+   * This used to SNAP the rotated box to the grid instead, on the reasoning that
+   * a quarter turn can land a group between grid lines even when every object
+   * started on one. True, and it drifts: a turn of an oblong leaves the box on a
+   * half-grid, the snap pulls it the same way every time, and nothing ever pulls
+   * it back -- so a group rotated four times did not come back where it started,
+   * and one rotated all afternoon walked across the map.
+   *
+   * Four quarter turns MUST be the identity. That is worth more than landing on
+   * the grid: an off-grid group is one drag to fix and accumulated drift is not
+   * fixable at all, because by the time it is visible there is no record of where
+   * the thing began.
+   */
   const nb = groupBox(list);
-  const dx = snap(nb.x) - nb.x, dy = snap(nb.y) - nb.y;
+  const dx = cx - (nb.x + nb.w/2), dy = cy - (nb.y + nb.h/2);
   if (dx || dy) moveObjects(list, dx, dy);
 }
 
@@ -4659,7 +4824,15 @@ function drawGroup(list) {
   if (!b) return;
   ctx.strokeStyle = '#ffd25c';
   ctx.lineWidth = 1.5 / view.z;
-  ctx.setLineDash([9/view.z, 5/view.z]);
+  /*
+   * Solid for a real group, dashed for an ad-hoc multi-select. They behave
+   * differently on the very next click -- one comes back whole, the other does
+   * not -- so they must not look the same.
+   */
+  const g = groupOf(list[0]);
+  const whole = g && list.every((o) => groupOf(o) === g) &&
+                map.objects.filter((o) => groupOf(o) === g).length === list.length;
+  if (!whole) ctx.setLineDash([9/view.z, 5/view.z]);
   ctx.strokeRect(b.x, b.y, b.w, b.h);
   ctx.setLineDash([]);
   const pts = groupPts(list);
@@ -4718,9 +4891,77 @@ function beginMove(w, grabbed) {
   dragging = { move:true, wx:w.x, wy:w.y, pairs:cloneObjs(list),
                ax: anchor ? anchor.x : 0, ay: anchor ? anchor.y : 0 };
 }
+/*
+ * Selection groups.
+ *
+ * "These forty things are one thing while I am moving them around." Deliberately
+ * NOT a module: a module is a graded, reusable piece of level with an entry, an
+ * exit and a rung, and treating every scenery cluster as one would fill the
+ * library with ungraded rubble. A group is a fact about this map and this
+ * afternoon.
+ *
+ * Stored as `o.group`, an integer, on the objects themselves. That makes it
+ * survive undo (a snapshot is the objects), the session store (which persists
+ * map.objects verbatim), and a copy-paste -- which is why a paste REMAPS the ids
+ * it finds, so the copy is its own group rather than joining the original. It
+ * does NOT survive a save through the game map format, which has nowhere to put
+ * it; that is the honest cost of not inventing a sidecar file, and it is
+ * stripped from module records for the same reason `z` is.
+ */
+/*
+ * Group ids are derived from the map, not counted in a variable.
+ *
+ * A counter would have to be restored on every path that replaces map.objects --
+ * open, undo, session restore, module edit -- and the one that got missed would
+ * hand out an id already in use, silently welding two unrelated clusters into one
+ * group. Reading the max off the objects is O(n) at the only moment it is needed
+ * and cannot be wrong.
+ */
+const newGroupId = () => map.objects.reduce((m, o) => Math.max(m, o.group || 0), 0) + 1;
+const groupOf = (o) => (o && o.group) || 0;
+/** Every id in this object's group, or just its own if it is in none. */
+function groupIds(o) {
+  const g = groupOf(o);
+  if (!g) return [o.id];
+  return map.objects.filter((q) => groupOf(q) === g).map((q) => q.id);
+}
+/** Expand a list of ids to whole groups. */
+function withGroups(ids) {
+  const gs = new Set();
+  for (const id of ids) { const g = groupOf(byId(id)); if (g) gs.add(g); }
+  if (!gs.size) return ids.slice();
+  const out = new Set(ids);
+  for (const q of map.objects) if (gs.has(groupOf(q))) out.add(q.id);
+  return [...out];
+}
+function groupSelection() {
+  const list = selected();
+  if (list.length < 2) return;
+  pushHistory();
+  // one flat group, absorbing any the selection already touched: nested groups
+  // would need a way to select "the inner one", and there is no gesture for that
+  const g = newGroupId();
+  for (const o of list) o.group = g;
+  sel = list.map((o) => o.id);
+  refresh();
+}
+function ungroupSelection() {
+  const list = selected().filter((o) => o.group);
+  if (!list.length) return;
+  pushHistory();
+  for (const o of list) delete o.group;
+  refresh();
+}
+
 function pick(o, additive) {
-  if (additive) sel.includes(o.id) ? sel = sel.filter((i)=>i!==o.id) : sel.push(o.id);
-  else if (!sel.includes(o.id)) sel = [o.id];
+  const g = groupIds(o);
+  if (additive) {
+    // the whole group goes in or comes out together, since that is what being a
+    // group means -- a half-selected group is the state it exists to prevent
+    sel = sel.includes(o.id)
+      ? sel.filter((i) => !g.includes(i))
+      : [...new Set([...sel, ...g])];
+  } else if (!sel.includes(o.id)) sel = g;
   refresh();
 }
 
@@ -4762,8 +5003,11 @@ function onMouseDown(e) {
   if (canPaint() && !spaceDown && !e.ctrlKey && !e.metaKey && !e.altKey && e.button === 0) {
     pushHistory();          // once, for the whole stroke
     sel = [];
+    const useBrush = brushIsClipboard();
+    // the footprint is fixed for the whole stroke: measuring it per move would
+    // let a stroke change its own lattice halfway across the room
     dragging = { paint: true, done: new Set(), made: [], c0: cellOf(w),
-                 brush: clipboard.length > 0 };
+                 brush: useBrush, foot: useBrush ? brushSize() : { cols: 1, rows: 1 } };
     paintAt(dragging, w, e.shiftKey);
     refresh();
     return;
@@ -4801,6 +5045,22 @@ function onMouseDown(e) {
    * select tool; that is decided at mouseup, where a click can be told from a
    * drag, since the drag is the additive marquee.
    */
+  /*
+   * Alt is "no, just this one", and it beats ctrl.
+   *
+   * The inverse of ctrl's "and this one too": whatever is selected, alt+click
+   * reduces it to the single object -- or the single group -- under the cursor.
+   * That is the gesture you want once a selection has grown past what you meant,
+   * and reaching for it should not require first working out how to undo the ctrl
+   * rules. Held together with ctrl, alt wins.
+   */
+  if (e.altKey) {
+    const under = topmostAt(w.x, w.y);
+    if (under) { sel = groupIds(under); adoptFrom(under); refresh(); beginMove(w, under); }
+    else { sel = []; refresh(); }
+    return;
+  }
+
   if (e.ctrlKey || e.metaKey) {
     const under = topmostAt(w.x, w.y);
     if (under) {
@@ -4845,6 +5105,23 @@ function onMouseDown(e) {
 
   const under = topmostAt(w.x, w.y);
   if (under) { pick(under, e.shiftKey); beginMove(w, under); return; }
+
+  /*
+   * Empty space INSIDE the selection's own box still drags the selection.
+   *
+   * The box is what the eye reads as "the thing" -- a run of platforms with gaps
+   * between them is one object to look at -- so a click in one of those gaps
+   * should move it, not throw it away and start a marquee. Only space outside the
+   * box is blank space.
+   */
+  if (sel.length > 1) {
+    const b = groupBox(selected());
+    if (b && w.x >= b.x && w.x <= b.x + b.w && w.y >= b.y && w.y <= b.y + b.h) {
+      beginMove(w, null);
+      return;
+    }
+  }
+
   // Empty space with the select tool draws a marquee. Panning stays on
   // space+drag and the middle button, which is where it was already.
   if (!e.shiftKey) { sel = []; refresh(); }
@@ -5004,7 +5281,9 @@ function onMouseUp() {
         const b = bounds(o);
         return b.x + b.w >= x0 && b.x <= x1 && b.y + b.h >= y0 && b.y <= y1;
       }).map((o) => o.id);
-      sel = m.add ? [...new Set([...sel, ...inside])] : inside;
+      // a marquee that catches part of a group takes all of it
+      const grown = withGroups(inside);
+      sel = m.add ? [...new Set([...sel, ...grown])] : grown;
     }
   }
   /*
@@ -5083,6 +5362,7 @@ function onKeyDown(e) {
     if (k === 'y') { redo(); e.preventDefault(); return; }
     if (k === 'c') { copySel(); e.preventDefault(); return; }
     if (k === 'v') { paste(); e.preventDefault(); return; }
+    if (k === 'g') { e.shiftKey ? ungroupSelection() : groupSelection(); e.preventDefault(); return; }
   }
   if (/^Arrow/.test(e.key) && !e.repeat && s.length) pushHistory();
   if (e.key === 'Escape') {
@@ -5108,21 +5388,34 @@ function onKeyDown(e) {
   else if (e.key === '[') { if(!e.repeat) pushHistory(); s.forEach((o)=>{ o.z = (o.z||0) - 1; if(o.kind==='art') artStyle.z = o.z; }); refresh(); }
   else if (e.key === ']') { if(!e.repeat) pushHistory(); s.forEach((o)=>{ o.z = (o.z||0) + 1; if(o.kind==='art') artStyle.z = o.z; }); refresh(); }
   else if (e.key === 'p') { setPaint(!paint); schedulePersist(); }
+  // '+' as well as '=', so it works whether or not shift is held
+  else if (e.key === '=' || e.key === '+') { stepGrid(1); }
+  else if (e.key === '-' || e.key === '_') { stepGrid(-1); }
   else if (e.key === 'x') { pushHistory(); s.forEach((o)=>{ if(o.kind==='art') { o.flipX = o.flipX?0:1; artStyle.flipX = o.flipX; } }); refresh(); }
   else if (e.key === 'y') { pushHistory(); s.forEach((o)=>{ if(o.kind==='art') { o.flipY = o.flipY?0:1; artStyle.flipY = o.flipY; } }); refresh(); }
-  else if (e.key === 'r' && s.length) {
+  else if ((e.key === 'r' || e.key === 'R') && s.length) {
     pushHistory();
     /*
-     * Textures alone keep the old behaviour -- spin in place and remember the
-     * angle for the next stamp. Anything else rotates as a group about the
-     * selection's centre, which is the only way a run of platforms and the coins
-     * on them can be turned without coming apart.
+     * `r` turns the SHAPE, about the selection's centre -- the only way a run of
+     * platforms and the coins on them can be turned without coming apart, and the
+     * only thing that makes sense for a wall of textures too.
+     *
+     * `alt+r` turns each texture in place instead, spinning its own `rot` and
+     * remembering the angle for the next stamp. That is right for one tile and
+     * for re-facing a set of them, and it used to be what plain `r` did whenever
+     * everything selected was a texture -- which meant a wall could not be turned
+     * as a wall at all.
      */
-    if (s.every((o) => o.kind === 'art')) {
-      s.forEach((o)=>{ o.rot = ((o.rot||0) + 90) % 360; artStyle.rot = o.rot; });
+    if (e.altKey) {
+      s.forEach((o)=>{ if (o.kind === 'art') { o.rot = ((o.rot||0) + 90) % 360; artStyle.rot = o.rot; } });
+    } else if (s.length === 1 && s[0].kind === 'art') {
+      // one tile: turning it about its own centre and turning "the shape" are the
+      // same gesture, and only this one keeps the angle for the next stamp
+      s[0].rot = ((s[0].rot||0) + 90) % 360; artStyle.rot = s[0].rot;
     } else {
       rotateSelection(s, 1);
     }
+    if (e.altKey) e.preventDefault();   // alt+letter opens the browser's own menus
     refresh();
   }
 }
@@ -5130,6 +5423,8 @@ function onKeyDown(e) {
 // ---------------------------------------------------------------- panels
 function setTool(t) {
   tool = t;
+  clipBrush = false;
+  renderBrush();
   [...root.querySelectorAll('#mde-tools button')].forEach((b) =>
     b.classList.toggle('on', b.dataset.tool === t));
   /*
@@ -5384,6 +5679,8 @@ function groupProps(el, s) {
   };
   mk('↻ rotate 90°', () => rotateSelection(selected(), 1));
   mk('↺ back 90°', () => rotateSelection(selected(), 3));
+  if (selected().length > 1) mk('group', groupSelection);
+  if (selected().some((o) => o.group)) mk('ungroup', ungroupSelection);
   el.appendChild(row);
 
   const counts = {};
@@ -5394,6 +5691,109 @@ function groupProps(el, s) {
   list.textContent = Object.entries(counts)
     .map(([k2, n]) => n + ' × ' + (KINDS[k2] ? KINDS[k2].label : k2)).join(', ');
   el.appendChild(list);
+
+  if (Object.keys(counts).length === 1) massProps(el, s, s[0].kind);
+}
+
+/*
+ * Editing forty things at once.
+ *
+ * Only when the selection is all one kind, because a field means a different
+ * thing on a different kind and "set speed on the platforms and the robots" has
+ * no answer. Position is deliberately absent: setting x on forty objects stacks
+ * them, and moving them together is what the drag and the arrow keys are for.
+ * Size IS here -- "make all of these 50 tall" is a real thing to want and doing
+ * it one at a time is where building a room stops.
+ *
+ * A field the selection disagrees on shows blank rather than the first object's
+ * value, so nothing is silently flattened by opening the panel and closing it.
+ */
+function massProps(el, s, kind) {
+  const k = KINDS[kind];
+  if (!k) return;
+  const fields = k.fields || {};
+  const rows = [];
+  if (k.shape === 'rect') {
+    rows.push(['w', { type:'number', label:'width' }], ['h', { type:'number', label:'height' }]);
+  }
+  for (const p of Object.keys(k.props || {})) rows.push([p, fields[p] || { type:'number', label:p }]);
+  for (const p of Object.keys(fields)) {
+    const meta = fields[p];
+    if (!meta.crusher && !meta.zone && !meta.door) continue;
+    if (meta.crusher && !s.every((o) => o.stomper)) continue;
+    if (meta.zone && !s.every((o) => o.trigger === 'zone')) continue;
+    rows.push([p, meta]);
+  }
+  if (!rows.length) return;
+
+  const head = document.createElement('div');
+  head.className = 'note';
+  head.style.marginTop = '10px';
+  head.textContent = 'All ' + s.length + ' are ' + k.label +
+    '. Setting a value here sets it on every one. Blank means they disagree; ' +
+    'leave it blank and it stays that way.';
+  el.appendChild(head);
+
+  const apply = (field, v) => {
+    pushHistory();
+    for (const o of s) o[field] = v;
+    refreshObjs();
+    refreshProps();
+  };
+
+  for (const [field, meta] of rows) {
+    const vals = [...new Set(s.map((o) => o[field]))];
+    const same = vals.length === 1 ? vals[0] : undefined;
+    const wrap = document.createElement('div');
+    wrap.className = 'field';
+    const row = document.createElement('div');
+    row.className = 'row2';
+    const lab = document.createElement('span');
+    lab.textContent = meta.label || field;
+    lab.title = 'game field: ' + field + (same === undefined ? ' (mixed)' : '');
+    row.appendChild(lab);
+
+    let input;
+    if (meta.type === 'bool') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.style.width = 'auto';
+      input.checked = !!same;
+      // a mixed checkbox says so rather than picking a side
+      input.indeterminate = same === undefined;
+      input.onchange = () => apply(field, input.checked ? 1 : 0);
+    } else if (meta.type === 'select') {
+      input = document.createElement('select');
+      const blank = document.createElement('option');
+      blank.value = ''; blank.textContent = same === undefined ? '— mixed —' : '';
+      input.appendChild(blank);
+      for (const opt of meta.options) {
+        const op = document.createElement('option');
+        op.value = String(opt); op.textContent = String(opt);
+        if (same !== undefined && String(same) === String(opt)) op.selected = true;
+        input.appendChild(op);
+      }
+      if (same === undefined) input.value = '';
+      input.onchange = () => {
+        if (input.value === '') return;
+        const v = input.value;
+        apply(field, isNaN(Number(v)) ? v : Number(v));
+      };
+    } else {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.value = same === undefined ? '' : (same ?? '');
+      input.placeholder = same === undefined ? 'mixed' : '';
+      input.onchange = () => {
+        const v = input.value;
+        if (v === '' && same === undefined) return;   // left alone, not cleared
+        apply(field, (v !== '' && !isNaN(Number(v))) ? Number(v) : v);
+      };
+    }
+    row.appendChild(input);
+    wrap.appendChild(row);
+    el.appendChild(wrap);
+  }
 }
 
 function refreshObjs() {
@@ -5530,6 +5930,22 @@ const SAVED_HISTORY = 30;
 const sessionKey = (id) => (io.storageKey || 'johnny-editor') + ':' + id;
 const stateKey = () => sessionKey(map.meta.id || $('mapName').value || 'untitled');
 
+/*
+ * The grid ladder, and the keys that walk it.
+ *
+ * The same steps the dropdown offers, because two different sets of grid sizes
+ * would be two answers to "what is a cell". The grid gets changed constantly
+ * while drawing -- coarse to block a room out, fine to detail it -- and reaching
+ * for a dropdown breaks the stroke you were in the middle of.
+ */
+const GRID_STEPS = [0, 10, 25, 50, 100];
+function stepGrid(dir) {
+  const i = GRID_STEPS.indexOf(grid);
+  const at = i < 0 ? GRID_STEPS.findIndex((g) => g >= grid) : i;
+  const next = Math.max(0, Math.min(GRID_STEPS.length - 1, (at < 0 ? 0 : at) + dir));
+  if (GRID_STEPS[next] !== grid) { setGrid(GRID_STEPS[next]); schedulePersist(); }
+}
+
 function setGrid(v) {
   grid = Number(v) || 0;
   const el = $('grid');
@@ -5657,7 +6073,26 @@ async function boot() {
 
   $('grid').onchange = (e) => { setGrid(Number(e.target.value)); schedulePersist(); };
   $('paint').onclick = () => { setPaint(!paint); schedulePersist(); };
+  $('brush').onclick = () => {
+    if (!clipboard.length) return;
+    clipBrush = !clipBrush;
+    renderBrush();
+  };
+  renderBrush();
   $('fit').onclick = fitView;
+  $('fillspikes').onclick = () => {
+    // the palette knows the tile's REAL size; the constant is only the recipe's
+    const t = tileList.find((x) => x.name === SPIKE_TILE.name) || SPIKE_TILE;
+    const made = autotileSpikes(map.objects, t);
+    if (!made.length) {
+      alert('Every spike already has art over it.');
+      return;
+    }
+    pushHistory();
+    for (const o of made) { o.id = nextId++; map.objects.push(o); }
+    sel = made.map((o) => o.id);
+    refresh();
+  };
   $('artTop').onclick = (e) => {
     artOnTop = !artOnTop;
     e.target.classList.toggle('on', artOnTop);
@@ -5825,7 +6260,8 @@ function mount(opts) {
 return {
   mount, KINDS,
   _geom: { rotate90, scaleObj, rotateSelection, clampBox, laserRect, groupBox, moveObjects, bounds,
-            placeTile, isSurfaceTile, isHazardTile, rotAABB, unrotSize },
+            placeTile, isSurfaceTile, isHazardTile, rotAABB, unrotSize,
+            spikeArt, autotileSpikes, SPIKE_TILE },
   /*
    * The module half, exported for the same reason: a module that does not survive
    * a trip through the editor loses its solve record and its hand-play verdict,
@@ -5847,6 +6283,7 @@ return {
   // clipboard is the LIVE array: it is the paint brush now, and a test that
   // cannot empty it cannot check the fallback to the armed tool
   _state: () => ({ view, grid, paint, tool, sel: sel.slice(), clipboard,
+                   clipBrush: brushIsClipboard(),
                    objects: map.objects, meta: map.meta,
                    filter: modFilter,
                    modules: moduleLib, armed: pendingModule, dialog: modDialog, handleAt, bounds }),

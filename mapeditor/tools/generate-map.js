@@ -141,6 +141,19 @@ function rng(seed) {
 }
 const pick = (rand, list) => list[Math.floor(rand() * list.length)];
 
+/*
+ * Pick something that is not already in this band, if the library can manage it.
+ *
+ * Four interior modules is only an improvement on three corridor coins if they are four
+ * DIFFERENT rooms; the same ledge four times in a row is its own kind of boring, and with a
+ * library of eight it is what uniform random picking gives you. Falls back to the whole pool
+ * rather than failing, because a repeat is still better than a coin on a flat floor.
+ */
+function pickFresh(rand, list, used) {
+  const fresh = list.filter((m) => !used.has(m.name));
+  return pick(rand, fresh.length ? fresh : list);
+}
+
 // ---------------------------------------------------------------------------
 // Pieces
 // ---------------------------------------------------------------------------
@@ -263,8 +276,18 @@ function buildCorridor(x0, y, len) {
  *
  * Compactness is spent in the order it hurts least: interior modules first (they are texture --
  * the gate is what grades the band), then corridor length (which is only walking).
+ *
+ * The generous end of the ladder was raised in 5c-1, from two interior modules to four, and its
+ * corridors shortened rather than lengthened. The old top profile put one gate, two rooms and
+ * three coins-on-a-flat-floor in a band, which is a level that is half walking; the point of a
+ * band is the playing, and a corridor is the thing between two pieces of playing rather than
+ * content in its own right. Where the clock or the library cannot afford that, the ladder still
+ * walks down to exactly what it used to be.
  */
 const PROFILES = [
+  { interiors: 4, corridorMin: 600, perCheck: 400 },
+  { interiors: 3, corridorMin: 600, perCheck: 400 },
+  { interiors: 3, corridorMin: 900, perCheck: 700 },
   { interiors: 2, corridorMin: 900, perCheck: 700 },
   { interiors: 1, corridorMin: 900, perCheck: 700 },
   { interiors: 1, corridorMin: 700, perCheck: 500 },
@@ -348,6 +371,8 @@ function layout(opts, profile) {
     const bandFirstObject = objects.length;
     const gate = pick(rand, byRung.get(rung));
     const interiorPool = usable.filter((m) => m.rung <= rung && m.name !== gate.name);
+    // what this band has already used, so the interiors are four different rooms
+    const usedHere = new Set([gate.name]);
     const bandX0 = x;
     const bandChecks = [];
     const speed = terminal(rung);
@@ -364,7 +389,13 @@ function layout(opts, profile) {
     // How the band's checks are divided: the gate's coin, then up to two interior modules each
     // carrying one, then corridor coins for the rest.
     const want = Math.max(1, opts.checks);
-    const interiors = Math.min(interiorPool.length, Math.max(0, Math.min(profile.interiors, want - 2)));
+    /*
+     * `want - 1` because the gate's own coin is one of them: a band CAN be nothing but modules,
+     * with no corridor coin at all. The cap used to be `want - 2`, which reserved one check for a
+     * coin on a flat floor no matter what -- there is no reason a band needs one, and with a
+     * small check count that reservation was the difference between a room and a corridor.
+     */
+    const interiors = Math.min(interiorPool.length, Math.max(0, Math.min(profile.interiors, want - 1)));
     let remaining = want - 1 - interiors;
 
     for (let i = 0; i <= interiors; i++) {
@@ -382,7 +413,8 @@ function layout(opts, profile) {
       x = cor.x1;
 
       if (i < interiors) {
-        const inner = pick(rand, interiorPool);
+        const inner = pickFresh(rand, interiorPool, usedHere);
+        usedHere.add(inner.name);
         const s = buildSlot(inner, x + G.wall + G.ledge, y);
         objects.push(...s.objects);
         provenance.push({ name: inner.name, x: s.x0, y: s.entryY, minRung: inner.rung });
@@ -475,7 +507,7 @@ function generate(opts) {
   const tried = [];
   for (const profile of PROFILES) {
     const res = layout(opts, profile);
-    if (!res.overrun) return { ...res, tried };
+    if (!res.overrun) return { ...res, tried, profile };
     tried.push({ profile, ...res.overrun });
   }
   const last = tried[tried.length - 1];
@@ -571,12 +603,24 @@ const coverageGaps = (objects) => REQUIRED.filter(([, t]) => !objects.some(t)).m
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
+/*
+ * The key is read BEFORE the value is consumed.
+ *
+ * It used to be read after -- `a[argv[i]...] = v` with `i` already advanced past the value by
+ * `argv[++i]` -- so every flag that takes one was filed under its own VALUE and never seen:
+ * `--seed 3` set `a['3']`, and `opts.seed` fell back to 1. Boolean flags worked, because nothing
+ * moved `i`, which is why `--list` and `--allow-unplayed` behaved and nothing looked wrong.
+ *
+ * Everything shipped so far was generated at the defaults whatever was typed. That happens to be
+ * what was wanted -- seed 1, six checks -- so it produced no visible symptom until `--out` was
+ * asked to write somewhere other than the map it would have overwritten anyway.
+ */
 function parseArgs(argv) {
   const a = {};
   for (let i = 2; i < argv.length; i++) {
     if (!argv[i].startsWith('--')) continue;
-    const v = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
-    a[argv[i].replace(/^--/, '')] = v;
+    const key = argv[i].replace(/^--/, '');
+    a[key] = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
   }
   return a;
 }
@@ -585,7 +629,29 @@ function main() {
   const a = parseArgs(process.argv);
   const opts = {
     seed: Number(a.seed || 1),
-    checks: Number(a.checks || 6),
+    /*
+     * Three, not six.
+     *
+     * The clock is the binding constraint on this map, not the geometry, and checks per band is
+     * the only knob that really moves it: every extra check is another stretch of corridor on the
+     * spine, and the spine is what has to be walked inside 147 seconds. What that buys, measured
+     * on the eight-module library at seed 1:
+     *
+     *     --checks 2   17 checks   15 inside a module   the densest layout, first choice
+     *     --checks 3   25 checks   15 inside a module
+     *     --checks 4   33 checks    8 inside a module   clock refuses every interior module
+     *     --checks 6   49 checks    8 inside a module   one gate per band and 41 corridor coins
+     *
+     * At six the generator was falling all the way to `interiors: 0` and the level was one room
+     * per band with a long walk between them -- which is exactly the "horribly boring" complaint.
+     * Three keeps most of the density and still gives 25 checks.
+     *
+     * This is a trade against LOCATION COUNT, which is an Archipelago-facing decision rather than
+     * a level-design one, so it is a default and not a rule. It also gets better on its own: more
+     * modules means more bands, and every band brings a gate check that is inside a room by
+     * construction. Phase 5d's 15-25 rooms should push the count back up without spending clock.
+     */
+    checks: Number(a.checks || 3),
     slack: Number(a.slack || 1.6),
     allowUnplayed: !!a['allow-unplayed'],
     id: String(a.id || `generated-${a.seed || 1}`),
@@ -628,6 +694,21 @@ function main() {
   }, null, 1) + '\n');
 
   console.log(`${res.checks.length} checks across ${res.bands.length} bands (rungs ${res.bandRungs.join(', ')})`);
+  /*
+   * Which profile won, and how much of the map is playing rather than walking.
+   *
+   * The profile is the single most useful number here and it used to be invisible: a run that
+   * fell all the way to `interiors: 0` looked exactly like one that got its first choice, so
+   * "the level is boring" and "the clock refused to pay for anything better" were the same
+   * output. They want different fixes.
+   */
+  const inMods = res.checks.filter((c) => c.module).length;
+  console.log(`  layout: ${res.profile.interiors} interior modules per band allowed, ` +
+    `corridors from ${res.profile.corridorMin}px` +
+    (res.tried.length ? `  (${res.tried.length} denser layout${res.tried.length > 1 ? 's' : ''} ` +
+      'did not fit the clock)' : '  (its first choice)'));
+  console.log(`  ${inMods} of ${res.checks.length} checks are inside a module; ` +
+    `${res.checks.length - inMods} are coins in a corridor`);
   for (const b of res.bands) {
     console.log(`  rung ${String(b.rung).padStart(2)}  gate ${b.gate.padEnd(18)} ` +
       `${b.checks} checks  needs time tier ${b.timeTier}`);

@@ -18,6 +18,74 @@ for (const c of cases) {
   eq(c, before, 'rotate90 x4 identity: ' + c.kind);
 }
 
+/*
+ * Rotating a SELECTION four times is the identity too, and that is the harder
+ * claim: rotateSelection used to snap the rotated group box back onto the grid,
+ * which for an oblong lands on a half-grid and pulls the same way every time. The
+ * group crept across the map a little on every turn and nothing pulled it back.
+ * It now preserves the box centre exactly instead -- an off-grid group is one drag
+ * to fix, and accumulated drift is not fixable at all.
+ */
+{
+  const group = [
+    { id:20, kind:'plat', x:0,   y:0,  w:300, h:50 },
+    { id:21, kind:'plat', x:350, y:0,  w:50,  h:50 },
+    { id:22, kind:'coin', x:170, y:-30, w:0,  h:0 },
+  ];
+  const before = JSON.parse(JSON.stringify(group));
+  for (let i = 0; i < 4; i++) g.rotateSelection(group, 1);
+  eq(group, before, 'four quarter turns of an oblong SELECTION is the identity');
+  /*
+   * ...and nothing went missing on the way. There is one unreproduced report of a
+   * texture being lost or shifted by one during a rotation (5b-10, H1). The
+   * identity check above compares contents and would not notice a shorter list at
+   * all, so the count and the ids are asserted separately.
+   */
+  eq(group.map((o) => o.id), before.map((o) => o.id),
+     'and every object is still there, in the same order');
+
+  const c0 = g.groupBox(group);
+  g.rotateSelection(group, 1);
+  const c1 = g.groupBox(group);
+  eq([c1.x + c1.w/2, c1.y + c1.h/2], [c0.x + c0.w/2, c0.y + c0.h/2],
+     'and one turn leaves the group on the centre it turned about');
+  g.rotateSelection(group, 3);
+  eq(group, before, 'a turn and three back is the identity as well');
+}
+
+/*
+ * Spike autotiling. The rect is divided EVENLY rather than laid with whole tiles
+ * and a clipped remainder: art objects cannot clip, only resize, so "clip the
+ * remainder" means one visibly squashed column at the end of every strip. The
+ * tiles must also meet exactly -- a gap between two spike strips reads as a safe
+ * step and is not one.
+ */
+{
+  const tile = { name: 'hazard_surface', w: 120, h: 80 };
+  const strip = g.spikeArt({ x: 100, y: 50, w: 500, h: 80 }, tile);
+  eq(strip.length, 4, 'a 500px strip takes four 120px tiles, not four and a stub');
+  eq([strip[0].x, strip[0].w], [100, 125], 'each one carries an equal share of the remainder');
+  const right = Math.max(...strip.map((o) => o.x + o.w));
+  const left = Math.min(...strip.map((o) => o.x));
+  eq([left, right], [100, 600], 'and the run covers the rect exactly, end to end');
+  const xs = strip.map((o) => o.x).sort((a, b) => a - b);
+  eq(xs.every((x, i) => i === 0 || Math.abs(x - (xs[i-1] + strip[0].w)) < 1e-9), true,
+     'with no gap between neighbours -- a gap in a spike strip reads as a safe step');
+
+  const tiny = g.spikeArt({ x: 0, y: 0, w: 30, h: 20 }, tile);
+  eq(tiny.length, 1, 'a rect smaller than one tile still gets one tile, not none');
+  eq([tiny[0].w, tiny[0].h], [30, 20], 'squeezed to fit rather than overflowing the hazard');
+
+  const objs = [
+    { kind: 'spike', x: 0, y: 0, w: 240, h: 80 },
+    { kind: 'spike', x: 500, y: 0, w: 240, h: 80 },
+    { kind: 'art', tile: 'hazard_surface', x: 500, y: 0, w: 240, h: 80 },
+  ];
+  eq(g.autotileSpikes(objs, tile).length, 2,
+     'only the untextured rect is filled -- pressing it twice is a no-op, and it ' +
+     'never doubles up on hand-textured work');
+}
+
 // a quarter turn takes a horizontal beam upright and keeps its length
 const beam = { id:7, kind:'laser', x:0, y:0, w:0, h:0, length:590, horizontal:1 };
 g.rotate90(beam, 0, 0);
