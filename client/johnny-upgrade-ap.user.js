@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Johnny Upgrade Archipelago Client
 // @namespace    johnny-upgrade-ap
-// @version      0.1.1
+// @version      0.1.2
 // @description  Archipelago multiworld integration for Johnny Upgrade on coolmathgames.com
 // @match        https://www.coolmathgames.com/0-johnny-upgrade/play
 // @run-at       document-idle
@@ -193,6 +193,7 @@
       this.storageKey = null;
       this.scoutedItemDisplay = {}; // location name -> display string, once resolved
       this.dataPackageReady = false;
+      this.pendingReceivedPackets = []; // ReceivedItems that arrived before the DataPackage
       this.stateSyncTimer = null;
       // Our position in the cash ledger: the running total we have REPORTED to the server,
       // advanced at send time. Not "the last value the server told us" -- see syncCash.
@@ -329,6 +330,7 @@
       this.slotInfo = {};
       this.scoutedItemDisplay = {};
       this.dataPackageReady = false;
+      this.pendingReceivedPackets = [];
       this.reportedCash = null;
       this._cashInFlight = 0;
       this._cashGainBeforeBaseline = 0;
@@ -450,8 +452,12 @@
         case "RoomInfo":
           // Request every game's data package (not just ours), since items placed in our own
           // shop locations can belong to any player's game and we want to be able to resolve
-          // their names for the shop's scouted-item display later.
-          this._send({ cmd: "GetDataPackage" });
+          // their names for the shop's scouted-item display later. The games must be named
+          // explicitly: current servers answer a bare GetDataPackage with an empty package.
+          this._send({
+            cmd: "GetDataPackage",
+            games: Array.from(new Set([GAME_NAME, ...(packet.games || [])])),
+          });
           this._send({
             cmd: "Connect",
             password: this.password,
@@ -479,8 +485,13 @@
               );
             }
           }
+          if (!this.itemIdToNameByGame[GAME_NAME]) {
+            log("DataPackage arrived without " + GAME_NAME + "; checks and items cannot be resolved.");
+            break;
+          }
           this.dataPackageReady = true;
           if (this.slotData) this._scoutShopLocations(); // Connected may have already happened
+          for (const pending of this.pendingReceivedPackets.splice(0)) this._handleReceivedItems(pending);
           break;
         }
         case "ConnectionRefused":
@@ -664,6 +675,12 @@
     }
 
     _handleReceivedItems(packet) {
+      // Names are needed to apply items and to advance lastAdditiveIndex correctly, so hold the
+      // packet until the DataPackage resolves them rather than recording raw IDs.
+      if (!this.dataPackageReady) {
+        this.pendingReceivedPackets.push(packet);
+        return;
+      }
       if (packet.index === 0) this.allReceivedItemNames = [];
       const ownItemNames = this.itemIdToNameByGame[GAME_NAME] || {};
       for (let i = 0; i < packet.items.length; i++) {
