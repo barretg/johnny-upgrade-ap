@@ -52,6 +52,18 @@ class Enemysanity(DefaultOnToggle):
     display_name = "Enemysanity"
 
 
+class CoinGroupUnlocks(Toggle):
+    """Each distinct cluster of coins on the map is locked behind its own named item.
+
+    A group's coins do not spawn until you have received its item, and its coin checks need that
+    item in logic. The group directly left of the spawn point ("Left spawn coins") is always in
+    your starting inventory. A group received mid-round appears immediately.
+
+    Requires Coinsanity; it is ignored (with a warning) when Coinsanity is off.
+    """
+    display_name = "Coin Group Unlocks"
+
+
 class PassiveIncomeSeconds(Range):
     """Seconds of cumulative round playtime needed to earn one passive income tick.
 
@@ -111,6 +123,7 @@ class KnockbackBoostsInLogic(Toggle):
 @dataclass
 class JohnnyUpgradeOptions(PerGameCommonOptions):
     coinsanity: Coinsanity
+    coin_group_unlocks: CoinGroupUnlocks
     enemysanity: Enemysanity
     damage_boosts_in_logic: DamageBoostsInLogic
     recoil_boosts_in_logic: RecoilBoostsInLogic

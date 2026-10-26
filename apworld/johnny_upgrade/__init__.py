@@ -1,8 +1,11 @@
 from typing import Any
 
+import logging
+
 from BaseClasses import Item, Region
 from worlds.AutoWorld import WebWorld, World
 
+from .coin_groups import COIN_GROUP_ITEM_NAMES, COIN_GROUPS, STARTING_COIN_GROUP_ITEM
 from .items import (
     COIN_BUNDLE_VALUES,
     FIXED_ITEM_NAMES,
@@ -54,6 +57,17 @@ class JohnnyUpgradeWorld(World):
         # round at all. Guaranteeing one copy as starting inventory closes that softlock.
         self.multiworld.push_precollected(self.create_item(PROGRESSIVE_SPEED))
 
+        # Without coinsanity the coins are not locations, so the group items would only displace
+        # filler that does not exist (the 85 non-coin locations are already nearly all fixed items).
+        if self.options.coin_group_unlocks and not self.options.coinsanity:
+            logging.warning(
+                f"Johnny Upgrade: Coin Group Unlocks requires Coinsanity; disabling it for player "
+                f"{self.player} ({self.player_name})."
+            )
+            self.options.coin_group_unlocks.value = 0
+        if self.options.coin_group_unlocks:
+            self.multiworld.push_precollected(self.create_item(STARTING_COIN_GROUP_ITEM))
+
     def create_regions(self) -> None:
         menu = Region("Menu", self.player, self.multiworld)
         level = Region("Level", self.player, self.multiworld)
@@ -99,6 +113,10 @@ class JohnnyUpgradeWorld(World):
             # count would exceed the total location count by one.
             count = data.count - 1 if name == PROGRESSIVE_SPEED else data.count
             pool.extend(self.create_item(name) for _ in range(count))
+        if self.options.coin_group_unlocks:
+            pool.extend(
+                self.create_item(name) for name in COIN_GROUP_ITEM_NAMES if name != STARTING_COIN_GROUP_ITEM
+            )
 
         total_locations = len(self.multiworld.get_unfilled_locations(self.player))
         needed_filler = total_locations - len(pool)
@@ -125,6 +143,14 @@ class JohnnyUpgradeWorld(World):
         return {
             "coinsanity": bool(self.options.coinsanity),
             "enemysanity": bool(self.options.enemysanity),
+            "coin_group_unlocks": bool(self.options.coin_group_unlocks),
+            # Location name per coin index. The client falls back to "Coin N" without it (seeds
+            # from before coins were named by group).
+            "coin_location_names": COIN_LOCATION_NAMES,
+            # Group item name -> 0-based coin indices.
+            "coin_groups": {
+                name: [n - 1 for n in coins] for name, coins in zip(COIN_GROUP_ITEM_NAMES, COIN_GROUPS)
+            },
             "shop_prices": SHOP_PRICES,
             "coin_bundle_values": COIN_BUNDLE_VALUES,
             "upgrade_track_tiers": UPGRADE_TRACK_TIERS,

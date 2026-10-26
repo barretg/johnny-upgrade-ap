@@ -9,6 +9,7 @@ from .generated_requirements import (
     GUN_REQUIREMENT_ID,
     REQUIREMENT_CLASSES,
 )
+from .coin_groups import COIN_LOCATION_NAME_BY_COIN
 from .items import (
     DOUBLE_JUMP,
     PROGRESSIVE_AMMO,
@@ -33,7 +34,7 @@ class JohnnyUpgradeLocation(Location):
 #   - a list of alternatives spelled out inline, in exactly the same shape a class has. Used for
 #     the bombs, whose requirements are hand-derived rather than swept (see BOMB_REQUIREMENTS).
 #   - the sentinel NEEDS_GUN: accessible once the Laser Gun ITEM has been received (not once the
-#     "Find the Gun" location is reachable -- the pickup only sends a check, see FIND_THE_GUN)
+#     "Laser Gun" pickup location is reachable -- the pickup only sends a check, see FIND_THE_GUN)
 NEEDS_GUN = "needs_gun"
 Requirement = Optional[Union[int, str, list[dict]]]
 
@@ -46,7 +47,9 @@ class LocationData(NamedTuple):
 # Walking into the map's gun pickup. This is a pure location check -- it does NOT arm Johnny;
 # the Laser Gun item does (see items.LASER_GUN). The client keeps the pickup spawning until this
 # location is checked even for a player who already received the item, so the two never interfere.
-FIND_THE_GUN = "Find the Gun"
+# Named after the item it corresponds to. Older seeds call it "Find the Gun"; the id is the same,
+# and the client accepts either name.
+FIND_THE_GUN = "Laser Gun"
 
 # Price ladders from the original shop.js -- unchanged from vanilla. These fund the shop-location
 # pacing: local cash comes only from received Coin Bundle items now, since map coins are pure
@@ -126,7 +129,9 @@ XP_SHOP_LOCATION = shop_location_name(DOUBLE_JUMP, 1)
 
 
 def coin_location_name(index: int) -> str:
-    return f"Coin {index + 1}"
+    # Named by coin group (see coin_groups.py). Ids stay positional, so this rename is invisible
+    # to older seeds, which still call these "Coin N".
+    return COIN_LOCATION_NAME_BY_COIN[index + 1]
 
 
 def robot_location_name(index: int) -> str:

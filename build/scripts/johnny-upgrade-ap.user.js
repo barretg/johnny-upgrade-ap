@@ -41,7 +41,7 @@
  *   With it OFF the coins are not checks at all, so vanilla payout is left completely alone and
  *   cash comes from both sources.
  * - The gun is fully decoupled from its pickup. Vanilla colgunCode sets `game.ldat.wpn.v = 0.1`
- *   and calls getGun() on contact; here contact only sends the "Find the Gun" check, and being
+ *   and calls getGun() on contact; here contact only sends the "Laser Gun" location check, and being
  *   armed comes solely from receiving the Laser Gun item. That means both directions have to be
  *   handled explicitly, because iniLevel branches on `wpn.v` and does exactly one of the two:
  *     * armed but check not yet sent -> iniLevel would skip creating the pickup entirely, making
@@ -847,6 +847,15 @@
     // create(), so receiving Double Jump mid-round previously had no effect until the next
     // round started. Set the live global directly so it takes effect immediately.
     if (typeof window.jumpMax !== "undefined") window.jumpMax = doubleJumpCount > 0 ? 2 : 1;
+
+    // Coin Group Unlocks: groups are plain unlocks like Double Jump. A group arriving mid-round
+    // shows its hidden coins straight away (see revealUnlockedCoins).
+    for (const [name, count] of Object.entries(counts)) {
+      if (!isCoinGroupItem(name)) continue;
+      if (!receivedCounts[name]) log(name + " unlocked.");
+      receivedCounts[name] = count;
+    }
+    revealUnlockedCoins();
     renderStatus();
   }
 
@@ -921,7 +930,12 @@
 
     // Double Jump and Laser Gun are unlocks applied from the full item history in
     // rebuildProgressiveState, not additively here -- so they are expected, not unknown.
-    if (!(name in UPGRADE_FIELD_BY_ITEM) && name !== "Double Jump" && name !== "Laser Gun") {
+    if (
+      !(name in UPGRADE_FIELD_BY_ITEM) &&
+      name !== "Double Jump" &&
+      name !== "Laser Gun" &&
+      !isCoinGroupItem(name)
+    ) {
       log("Don't know how to apply item: " + name);
     }
   }
@@ -971,8 +985,68 @@
   // starts) before patching, since the game's own <script> tags must run first to define these
   // as plain globals.
   // ---------------------------------------------------------------------------------------
+  // Coins are named by group ("Left spawn coin 1") from slot_data. Seeds from before that rename
+  // carry no coin_location_names and call them "Coin N"; the ids are the same either way.
   function coinLocationName(index) {
-    return "Coin " + (index + 1);
+    const names = ap.slotData && ap.slotData.coin_location_names;
+    return (names && names[index]) || "Coin " + (index + 1);
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Coin Group Unlocks. slot_data.coin_groups maps each group's item name to its 0-based coin
+  // indices. A coin whose group item has not been received is taken out of `coins` (so it cannot
+  // be hit-tested) and hidden, rather than destroyed, so it can be put back the moment its item
+  // arrives without rebuilding the sprite.
+  // ---------------------------------------------------------------------------------------
+  let coinGroupByIndex = null; // coin index -> group item name, built from slot_data
+  let coinGroupSlotData = null; // the slot_data object coinGroupByIndex was built from
+  let lockedCoins = []; // hidden sprites from the current round's iniLevel
+
+  function coinGroups() {
+    return (ap.slotData && ap.slotData.coin_groups) || {};
+  }
+
+  function isCoinGroupItem(name) {
+    return Object.prototype.hasOwnProperty.call(coinGroups(), name);
+  }
+
+  function coinGroupItemName(index) {
+    if (coinGroupSlotData !== ap.slotData) {
+      coinGroupSlotData = ap.slotData;
+      coinGroupByIndex = {};
+      for (const [name, indices] of Object.entries(coinGroups())) {
+        for (const i of indices) coinGroupByIndex[i] = name;
+      }
+    }
+    return coinGroupByIndex[index] || null;
+  }
+
+  function coinUnlocked(index) {
+    if (!(ap.slotData && ap.slotData.coin_group_unlocks)) return true;
+    const name = coinGroupItemName(index);
+    return !name || (receivedCounts[name] || 0) > 0;
+  }
+
+  function revealUnlockedCoins() {
+    if (lockedCoins.length === 0) return;
+    const stillLocked = [];
+    for (const c of lockedCoins) {
+      if (!c.game) continue; // destroyed with its level (Phaser nulls .game on destroy)
+      if (!coinUnlocked(c.__apIndex)) {
+        stillLocked.push(c);
+      } else if (ap.isLocationChecked(coinLocationName(c.__apIndex))) {
+        c.destroy();
+      } else if (Array.isArray(window.coins)) {
+        c.visible = true;
+        window.coins.push(c);
+      }
+    }
+    lockedCoins = stillLocked;
+  }
+  // The gun pickup location shares the Laser Gun item's name. Seeds from before that rename call
+  // it "Find the Gun"; same id, so use whichever name this seed's data package knows.
+  function gunLocationName() {
+    return "Find the Gun" in ap.locationNameToId ? "Find the Gun" : "Laser Gun";
   }
   function robotLocationName(index) {
     return "Robot " + (index + 1);
@@ -1011,7 +1085,7 @@
 
     // iniLevel does `if (!game.ldat.wpn.v) { create the colGun pickup } else { getGun() }` -- one
     // or the other, never both. Since owning the Laser Gun item no longer implies having collected
-    // the pickup, an armed player would otherwise never see it again and "Find the Gun" would be
+    // the pickup, an armed player would otherwise never see it again and the pickup check would be
     // permanently unreachable. Force the pickup branch for the original call, then re-arm.
     const originalIniLevel = window.iniLevel;
     window.iniLevel = function () {
@@ -1024,6 +1098,7 @@
         if (ldat) ldat.wpn.v = savedWpn;
       }
       if (hasLaserGun()) armGunIfNeeded();
+      lockedCoins = []; // previous round's sprites are gone
       filterAlreadyCheckedSpawns();
     };
 
@@ -1176,7 +1251,7 @@
       if (typeof window.fxPlay === "function" && window.sfx) window.fxPlay(window.sfx.fxFanfare);
       sprt.colGun.destroy();
       sprt.colGun = null;
-      ap.checkLocation("Find the Gun");
+      ap.checkLocation(gunLocationName());
     };
 
     const originalShopBtnPress = window.shopBtnPress;
@@ -1311,9 +1386,17 @@
   // been checked so it never spawns in for a player who already has that check.
   function filterAlreadyCheckedSpawns() {
     if (Array.isArray(window.coins)) {
+      // Tag only once per round: this runs again on every checked-locations update, by which point
+      // `coins` has already been filtered and its positions no longer match the map indices.
       window.coins.forEach((c, i) => {
-        c.__apIndex = i;
+        if (c.__apIndex === undefined) c.__apIndex = i;
       });
+      const toLock = window.coins.filter((c) => !coinUnlocked(c.__apIndex));
+      if (toLock.length > 0) {
+        window.coins = window.coins.filter((c) => coinUnlocked(c.__apIndex));
+        for (const c of toLock) c.visible = false;
+        lockedCoins.push(...toLock);
+      }
       if (ap.slotData && ap.slotData.coinsanity) {
         // filter() alone only stops these from being hit-tested again -- the sprite was already
         // added to the display list by iniLevel's isprt.create(), so it keeps rendering unless
@@ -1351,7 +1434,7 @@
     // The pickup is a location like any other: once checked it stops spawning. It does NOT arm
     // Johnny -- that is the Laser Gun item's job alone (handled in rebuildProgressiveState and the
     // iniLevel hook), so deliberately no wpn.v write and no getGun() call here.
-    if (window.sprt && window.sprt.colGun && ap.isLocationChecked("Find the Gun")) {
+    if (window.sprt && window.sprt.colGun && ap.isLocationChecked(gunLocationName())) {
       window.sprt.colGun.destroy();
       window.sprt.colGun = null;
     }

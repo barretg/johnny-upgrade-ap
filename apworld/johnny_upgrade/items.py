@@ -2,6 +2,8 @@ from typing import NamedTuple
 
 from BaseClasses import Item, ItemClassification
 
+from .coin_groups import COIN_GROUP_ITEM_NAMES
+
 
 class JohnnyUpgradeItem(Item):
     game = "Johnny Upgrade"
@@ -26,7 +28,7 @@ PROGRESSIVE_AMMO = "Progressive Ammo"
 PROGRESSIVE_GUN_POWER = "Progressive Gun Power"
 PROGRESSIVE_COIN_MULTIPLIER = "Progressive Coin Multiplier"
 
-# The laser gun itself. Walking into the map's gun pickup is still the "Find the Gun" LOCATION,
+# The laser gun itself. Walking into the map's gun pickup is still the "Laser Gun" LOCATION,
 # but it no longer arms Johnny -- it only sends the check. Being armed comes from receiving this
 # item, wherever the multiworld happened to put it. The two are fully decoupled: you can be armed
 # without ever visiting the pickup, and you can (and usually will) send the check long before the
@@ -97,6 +99,12 @@ item_table: dict[str, ItemData] = {
     TRAP_TIME: ItemData(12, ItemClassification.trap, 7),
     LASER_GUN: ItemData(13, ItemClassification.progression, 1),
 }
+
+# Coin Group Unlocks: one item per coin cluster (see coin_groups.py), offsets 14 onward. Only
+# placed when the option is on; until a group's item is received its coins never spawn, and its
+# coin locations require it in logic.
+for _i, _name in enumerate(COIN_GROUP_ITEM_NAMES):
+    item_table[_name] = ItemData(14 + _i, ItemClassification.progression, 1)
 
 # Names that are always included at full count regardless of coinsanity/enemysanity (progression
 # plus the fixed "useful" upgrades) vs. the filler/trap pool that gets scaled to fit.

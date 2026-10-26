@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Optional
 
 from rule_builder.rules import CanReachLocation, Has, Rule
 
+from .coin_groups import COIN_GROUP_ITEM_BY_COIN
 from .items import (
     DOUBLE_JUMP,
     LASER_GUN,
@@ -15,6 +16,7 @@ from .items import (
 )
 from .locations import (
     BOSS_ARENA_REQUIREMENT,
+    COIN_LOCATION_NAMES,
     NEEDS_GUN,
     REQUIREMENT_CLASSES,
     SHOP_MULTIPLIER_GATE,
@@ -138,6 +140,13 @@ def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
             rule_cache[class_id] = _class_rule(class_id, allow)
         return rule_cache[class_id]
 
+    # Coin Group Unlocks: "Coin N" also needs its group's item (see coin_groups.py).
+    coin_group_item: dict[str, str] = {}
+    if world.options.coin_group_unlocks:
+        coin_group_item = {
+            name: COIN_GROUP_ITEM_BY_COIN[i + 1] for i, name in enumerate(COIN_LOCATION_NAMES)
+        }
+
     for name, data in location_table.items():
         if name not in world.location_name_to_id:
             continue
@@ -180,6 +189,11 @@ def set_johnny_upgrade_rules(world: "JohnnyUpgradeWorld") -> None:
                 xp_rule = _class_rule(BOSS_ARENA_REQUIREMENT, allow)
                 if xp_rule is not None:
                     rule = xp_rule if rule is None else rule & xp_rule
+
+        group_item = coin_group_item.get(name)
+        if group_item is not None:
+            group_rule = Has(group_item)
+            rule = group_rule if rule is None else rule & group_rule
 
         if rule is not None:
             world.set_rule(location, rule)

@@ -374,7 +374,7 @@ def _mentions_reach(rule, name):
 
 check(
     not [r for r in gun_rules if r is not None and _mentions_reach(r, locations.FIND_THE_GUN)],
-    "no requirement rule depends on reaching the 'Find the Gun' location",
+    "no requirement rule depends on reaching the 'Laser Gun' pickup location",
 )
 
 # Nothing that needs bullets may be satisfiable without the gun -- the guarantee that makes the
@@ -465,6 +465,41 @@ check(
 )
 offsets = [d.code_offset for d in locations.location_table.values()]
 check(len(set(offsets)) == len(offsets), "location code offsets are unique")
+
+print("\ncoin groups")
+cg = sys.modules["johnny_upgrade.coin_groups"]
+_members = sorted(n for g in cg.COIN_GROUPS for n in g)
+check(_members == list(range(1, 247)), "every coin is in exactly one group")
+check(
+    cg.COIN_GROUP_ITEM_BY_COIN[1] == cg.STARTING_COIN_GROUP_ITEM,
+    "the starting group holds Coin 1 (left of spawn)",
+)
+check(len(set(cg.COIN_GROUP_ITEM_NAMES)) == len(cg.COIN_GROUP_ITEM_NAMES), "coin group names are unique")
+check(
+    len(set(locations.COIN_LOCATION_NAMES)) == 246 and not any(n.startswith("Coin ") for n in locations.COIN_LOCATION_NAMES),
+    "246 unique group-based coin location names",
+)
+check(
+    locations.COIN_LOCATION_NAMES[0] == "Left spawn coin 5" and locations.COIN_LOCATION_NAMES[7] == "Left spawn coin 1",
+    "coins number left to right within their group",
+)
+check(
+    [locations.location_table[n].code_offset for n in locations.COIN_LOCATION_NAMES] == list(range(76, 76 + 246)),
+    "coin location ids are unchanged by the rename (offsets 76..321 in map order)",
+)
+check(
+    all(items.item_table[n].classification is _ItemClassification.progression for n in cg.COIN_GROUP_ITEM_NAMES),
+    f"{len(cg.COIN_GROUP_ITEM_NAMES)} coin group items, all progression",
+)
+check(
+    min(items.item_table[n].code_offset for n in cg.COIN_GROUP_ITEM_NAMES)
+    > items.item_table[items.LASER_GUN].code_offset,
+    "coin group item offsets come after every pre-existing item",
+)
+check(
+    not set(cg.COIN_GROUP_ITEM_NAMES) & set(items.FIXED_ITEM_NAMES + items.SCALABLE_FILLER_NAMES),
+    "coin group items are placed only by the option",
+)
 
 print()
 if fail:
